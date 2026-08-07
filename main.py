@@ -35,31 +35,40 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """处理 Cloudflare Turnstile 人机验证（增强安全版，防止驱动崩溃）"""
+    """采用成功项目的核心循环逻辑：物理点击 + Token 密文状态检查"""
+    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
+    
     try:
-        time.sleep(3)
-        # 捕获可能的驱动断开异常
-        try:
-            result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
-        except Exception:
-            print(f"[INFO] ({step_name}) 未能通过脚本检测验证码（驱动可能受保护），跳过自动检测。")
-            return True
-
+        time.sleep(2)
+        # 1:1 对齐成功项目的探测机制：检查是否存在验证框
+        result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
             print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
             return True
+    except Exception:
+        pass
+
+    # 最多 3 次循环重试，确保图块或点击交互能够顺利通过并吐出 Token
+    for cf_attempt in range(3):
+        try:
+            print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
+            sb.uc_gui_click_captcha()
+            time.sleep(5)
+            
+            # 核心判断：根据 input 内是否有 Token 密文来判定是否成功打勾
+            cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
+            if cf_token_value and len(cf_token_value.strip()) > 0:
+                print(f"[INFO] ({step_name}) 验证成功！云盾 Token 令牌已顺利生成填充。")
+                return True
+            else:
+                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: Token 依然为空，准备重试...")
+        except Exception as e:
+            print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
-        print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试使用物理 GUI 点击...")
-        for i in range(3):
-            try:
-                sb.uc_gui_click_captcha()
-                time.sleep(3)
-            except Exception:
-                pass
-        return True
-    except Exception as e:
-        print(f"[WARN] ({step_name}) 处理验证码异常（已忽略）： {e}")
-        return True
+        time.sleep(3)
+        
+    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到 Token 填充，尝试继续执行后续动作...")
+    return True
 
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
@@ -133,7 +142,7 @@ def main():
             print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 处理登录页面的 CF 验证
+            # 处理登录页面的 CF 验证（应用新版循环校验机制）
             handle_cloudflare_turnstile(sb, "登录页")
 
             # 点击 Sign In 按钮
@@ -148,13 +157,14 @@ def main():
             # ==================== 第二步：进入后台并重置 ====================
             print(f"[INFO] 正在跳转到目标页面: {TARGET_URL}")
             sb.open(TARGET_URL)
-            time.sleep(4)
+            time.sleep(5)
 
-            # 处理后台页面的 CF 验证
+            # 处理后台页面的 CF 验证（应用新版循环校验机制）
             handle_cloudflare_turnstile(sb, "后台页")
 
             # 点击 Reset timer 按钮
             print("[INFO] 正在点击 Reset timer...")
+            sb.wait_for_element('button[aria-label="Reset timer"]', timeout=15)
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(2)
 
@@ -192,7 +202,7 @@ def main():
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
-                f"▶️ Start按钮已点击: {'s' if start_clicked else '否'}"
+                f"▶️ Start按钮已点击: {'是' if start_clicked else '否'}"
             )
             send_telegram_message(msg, screenshot_path)
             print("[INFO] 所有步骤执行完毕！")
