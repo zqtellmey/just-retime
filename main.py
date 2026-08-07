@@ -175,9 +175,9 @@ def main():
             print("[INFO] 正在查找 Just Reset 按钮并输出其完整元素内容...")
             
             just_reset_selectors = [
-                'xpath://button[contains(., "Just Reset") and .//i[contains(@class, "bi-arrow-clockwise")]]',
-                'xpath://button[contains(normalize-space(text()), "Just Reset")]',
-                'button:has(i.bi-arrow-clockwise)'
+                'xpath://button[contains(normalize-space(.), "Just Reset")]',
+                'xpath://button[.//i[contains(@class, "bi-arrow-clockwise")] and contains(normalize-space(.), "Just Reset")]',
+                'button:has(> i.bi-arrow-clockwise)'
             ]
             
             used_selector = None
