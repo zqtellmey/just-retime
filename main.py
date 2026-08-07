@@ -96,6 +96,38 @@ def debug_check_elements(sb):
             
     print("=" * 40)
 
+def click_at_coordinates_with_red_dot(sb, x, y):
+    """在指定坐标执行点击，并在页面上生成一个醒目的红色圆点标记用于定位校准"""
+    print(f"[INFO] 正在执行坐标点击 -> X: {x}, Y: {y}")
+    
+    # 注入红点并触发该坐标元素的点击事件
+    js_code = f"""
+    (function() {{
+        var dot = document.createElement('div');
+        dot.style.position = 'fixed';
+        dot.style.left = '{x}px';
+        dot.style.top = '{y}px';
+        dot.style.width = '16px';
+        dot.style.height = '16px';
+        dot.style.backgroundColor = 'red';
+        dot.style.borderRadius = '50%';
+        dot.style.border = '2px solid white';
+        dot.style.boxShadow = '0 0 10px black';
+        dot.style.zIndex = '999999';
+        dot.style.transform = 'translate(-50%, -50%)';
+        document.body.appendChild(dot);
+
+        var targetElem = document.elementFromPoint({x}, {y});
+        if (targetElem) {{
+            targetElem.click();
+        }}
+    }})();
+    """
+    try:
+        sb.execute_script(js_code)
+    except Exception as e:
+        print(f"[WARN] 坐标点击执行异常: {e}")
+
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
@@ -159,18 +191,14 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 使用 SeleniumBase 原生坐标点击 Just Reset 按钮 ====================
-            print("[INFO] 准备使用原生坐标点击 Just Reset 按钮...")
+            # ==================== 使用坐标点击 Just Reset 按钮（带红点提示） ====================
+            print("[INFO] 准备通过坐标点击弹窗中的 Just Reset 按钮...")
             
+            # 初始设定的坐标位置（可根据运行后的截图红点位置进行调整）
             TARGET_X = 590
             TARGET_Y = 795
             
-            try:
-                sb.click_coordinate(TARGET_X, TARGET_Y)
-                print(f"[INFO] 成功在坐标 ({TARGET_X}, {TARGET_Y}) 执行点击。")
-            except Exception as coord_err:
-                print(f"[WARN] 坐标点击异常: {coord_err}")
-
+            click_at_coordinates_with_red_dot(sb, TARGET_X, TARGET_Y)
             time.sleep(3)
 
             # 读取 reset 后的剩余时间
