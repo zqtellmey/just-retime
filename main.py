@@ -35,7 +35,7 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用成功项目的核心循环逻辑：物理点击 + 多语言/ID 兼容的成功状态检查"""
+    """采用成功项目的核心循环逻辑：物理点击 + 通过检测 checkbox 状态来判断是否通过"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
@@ -55,29 +55,30 @@ def handle_cloudflare_turnstile(sb, step_name):
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
-            # 核心判断：兼容检查 id="BKMH9" 元素，或文本中包含中英文成功提示 ("成功" / "Success")
-            success_matched = False
+            # 核心判断：检查 checkbox 是否已经被勾选 (checked 属性为 true) 或者 cf-turnstile-response 有值
+            is_verified = False
             try:
-                # 1. 检查是否存在指定 id 元素
-                if sb.is_element_visible('#BKMH9', timeout=1):
-                    success_matched = True
-                # 2. 检查页面可见文本是否包含中文“成功”或英文“Success”
-                elif sb.is_text_visible("成功") or sb.is_text_visible("Success") or sb.is_text_visible("success"):
-                    success_matched = True
+                is_verified = sb.driver.execute_script('''
+                    let checkbox = document.querySelector('input[type="checkbox"]');
+                    let responseInput = document.querySelector('input[name="cf-turnstile-response"]');
+                    let isChecked = checkbox && checkbox.checked;
+                    let hasToken = responseInput && responseInput.value && responseInput.value.trim().length > 0;
+                    return isChecked || hasToken;
+                ''')
             except Exception:
                 pass
 
-            if success_matched:
-                print(f"[INFO] ({step_name}) 验证成功！检测到人机通过标志。")
+            if is_verified:
+                print(f"[INFO] ({step_name}) 验证成功！检测到人机验证复选框已被勾选或已生成 Token。")
                 return True
             else:
-                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: 尚未检测到成功标志，准备重试...")
+                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: 验证尚未完成，准备重试...")
         except Exception as e:
             print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
         time.sleep(3)
         
-    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到成功标志，尝试继续执行后续动作...")
+    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到验证完成，尝试继续执行后续动作...")
     return True
 
 def accept_cookies_if_present(sb):
@@ -102,7 +103,10 @@ def debug_check_elements(sb):
         "邮箱输入框 (input[name='Email'])": "input[name='Email']",
         "密码输入框 (//*[@id='password'])": "//*[@id='password']",
         "密码输入框备用 (input[name='Password'])": "input[name='Password']",
-        "提交按钮 (button[type='submit'])": "button[type='submit']"
+        "提交按钮 (button[type='submit'])": "button[type='submit']",
+        "人机复选框 (input[type='checkbox'])": "input[type='checkbox']",
+        "人机复选框(中文 aria-label)": "xpath://input[@type='checkbox' and contains(@aria-label, '验证')]",
+        "人机复选框(英文 aria-label)": "xpath://input[@type='checkbox' and (contains(@aria-label, 'human') or contains(@aria-label, 'verify'))]"
     }
     
     for name, selector in selectors.items():
