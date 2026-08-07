@@ -35,7 +35,7 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用成功项目的核心循环逻辑：物理点击 + Token 密文状态检查"""
+    """采用成功项目的核心循环逻辑：物理点击 + Token密文状态检查 + 成功文本直接跳出"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
@@ -48,13 +48,23 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    # 最多 3 次循环重试，确保图块或点击交互能够顺利通过并吐出 Token
+    # 最多 3 次循环重试，每次检查是否有“成功！”文本或 Token 密文，一旦达成即刻跳出
     for cf_attempt in range(3):
         try:
+            # 优先检查页面是否已经出现了“成功！”字样（兼容你提到的 <span id="BKMH9">成功！</span> 结构）
+            if sb.is_text_visible("成功") or sb.is_text_visible("Success"):
+                print(f"[INFO] ({step_name}) 检测到成功提示，人机验证已通过，提前结束循环！")
+                return True
+
             print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
+            # 再次检查文本
+            if sb.is_text_visible("成功") or sb.is_text_visible("Success"):
+                print(f"[INFO] ({step_name}) 点击后检测到成功提示，人机验证已通过！")
+                return True
+
             # 核心判断：根据 input 内是否有 Token 密文来判定是否成功打勾
             cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
             if cf_token_value and len(cf_token_value.strip()) > 0:
@@ -171,9 +181,18 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # 点击 Just Reset 按钮
+            # 点击 Just Reset 按钮（采用安全健壮的点击逻辑，解决最后按钮点击无效问题）
             print("[INFO] 正在点击 Just Reset...")
-            sb.click('button:has(i.bi-arrow-clockwise)')
+            just_reset_selector = 'button:has(i.bi-arrow-clockwise)'
+            sb.wait_for_element(just_reset_selector, timeout=15)
+            try:
+                sb.click(just_reset_selector)
+            except Exception as e:
+                print(f"[WARN] 常规点击异常，尝试通过视口滚动及安全脚本点击: {e}")
+                btn_elem = sb.find_element(just_reset_selector)
+                sb.driver.execute_script("arguments[0].scrollIntoView(true);", btn_elem)
+                time.sleep(1)
+                sb.driver.execute_script("arguments[0].click();", btn_elem)
             time.sleep(3)
 
             # 读取 reset 后的剩余时间
