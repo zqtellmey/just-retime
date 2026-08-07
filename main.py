@@ -35,31 +35,28 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """优化的 Cloudflare 验证逻辑：优先检测成功文本或 Token 填充，避免过度报错"""
-    print(f"[INFO] ({step_name}) 开始检查 Cloudflare Turnstile 验证状态...")
+    """优化后的 Cloudflare 验证：给予充分缓冲并检测成功提示或组件加载"""
+    print(f"[INFO] ({step_name}) 正在检测 Cloudflare Turnstile 验证组件...")
     
-    try:
-        time.sleep(2)
-        # 预先检查页面是否存在验证码组件
-        has_turnstile = sb.is_element_visible('input[name="cf-turnstile-response"]') or sb.is_element_visible('.cf-turnstile')
-        if not has_turnstile:
-            print(f"[INFO] ({step_name}) 未检测到 Turnstile 验证组件，直接通过。")
-            return True
-    except Exception:
-        pass
-
-    # 循环尝试最多 3 次点击与检查
+    # 增加初始等待，防止 CF 组件由于页面加载过快而未渲染
+    time.sleep(3)
+    
     for cf_attempt in range(3):
         try:
-            # 检查是否已经出现了成功提示文本（支持中文“成功”或英文“Success”等关键词）
-            success_text_found = sb.is_text_visible("成功") or sb.is_text_visible("Success")
-            if success_text_found:
+            # 优先检查是否已经直接出现了成功回执文本
+            if sb.is_text_visible("成功") or sb.is_text_visible("Success"):
                 print(f"[INFO] ({step_name}) 检测到成功提示文本，验证已通过！")
                 return True
 
-            print(f"[INFO] ({step_name}) 发现验证拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
+            # 检查是否存在人机验证组件
+            has_turnstile = sb.is_element_visible('input[name="cf-turnstile-response"]') or sb.is_element_visible('.cf-turnstile')
+            if not has_turnstile and cf_attempt == 0:
+                print(f"[INFO] ({step_name}) 当前未检测到显式验证拦截，默认安全通过。")
+                return True
+
+            print(f"[INFO] ({step_name}) 发现验证组件或拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
             sb.uc_gui_click_captcha()
-            time.sleep(4)
+            time.sleep(5)
             
             if sb.is_text_visible("成功") or sb.is_text_visible("Success"):
                 print(f"[INFO] ({step_name}) 点击后成功通过验证！")
@@ -68,9 +65,9 @@ def handle_cloudflare_turnstile(sb, step_name):
         except Exception as e:
             print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
-        time.sleep(2)
+        time.sleep(3)
         
-    print(f"[WARN] ({step_name}) 验证检查结束，继续执行后续流程...")
+    print(f"[INFO] ({step_name}) 验证流程结束，继续执行...")
     return True
 
 def accept_cookies_if_present(sb):
@@ -110,7 +107,7 @@ def debug_check_elements(sb):
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
-        print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
+        print("[ERROR] 缺少必要的环境变量，请检查配置。")
         return
 
     # 使用 SeleniumBase uc 模式启动浏览器
@@ -123,44 +120,32 @@ def main():
             sb.open(LOGIN_URL)
             time.sleep(4)
 
-            # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
-
-            # 运行元素预检
             debug_check_elements(sb)
 
-            # 填写邮箱
             print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=15)
             sb.type('input[name="Email"]', USER_EMAIL)
-            
-            print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 填写密码
             print("[INFO] 正在输入密码...")
             sb.wait_for_element('//*[@id="password"]', timeout=15)
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
-            
-            print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 处理登录页面的 CF 验证
             handle_cloudflare_turnstile(sb, "登录页")
 
-            # 点击 Sign In 按钮
             print("[INFO] 正在点击登录按钮...")
             sb.click('button[type="submit"]')
-            time.sleep(4)
+            time.sleep(5)
 
-            # 截图并发送 Telegram
             sb.save_screenshot(screenshot_path)
             send_telegram_message("【步骤 1/2】账号登录成功，已过验证并提交表单。", screenshot_path)
 
             # ==================== 第二步：进入后台并重置 ====================
             print(f"[INFO] 正在跳转到目标页面: {TARGET_URL}")
             sb.open(TARGET_URL)
-            time.sleep(5)
+            time.sleep(6)  # 留出更充足的后台加载时间
 
             # 处理后台页面的 CF 验证
             handle_cloudflare_turnstile(sb, "后台页")
@@ -169,39 +154,55 @@ def main():
             print("[INFO] 正在点击 Reset timer...")
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=15)
             sb.click('button[aria-label="Reset timer"]')
-            time.sleep(2)
+            time.sleep(3)  # 留出弹窗完全展开的缓冲时间
 
-            # 【注意】Reset 弹窗中没有 Cloudflare 验证，直接跳过验证函数，防止产生不必要的错误日志！
-            print("[INFO] 已调出 Reset 弹窗，准备点击 Just Reset 按钮...")
+            print("[INFO] 已调出 Reset 弹窗，开始进行按钮状态详细探测与输出...")
 
-            # 点击 Just Reset 按钮：先悬停再点击，结合原生 WebElement 动作链，失败则降级 JS 点击
-            print("[INFO] 正在定位 Just Reset 按钮并执行鼠标悬停与点击...")
+            # ==================== 详细输出 Just Reset 按钮探测情况 ====================
             just_reset_selector = 'button:has(i.bi-arrow-clockwise)'
+            print("=" * 40)
+            print("[DEBUG] 正在诊断页面上的 Just Reset 按钮状态：")
+            try:
+                all_buttons = sb.find_elements("button")
+                print(f"[DEBUG] 当前页面总共找到 {len(all_buttons)} 个 button 元素。")
+                found_match = False
+                for idx, btn in enumerate(all_buttons):
+                    try:
+                        txt = btn.text.strip()
+                        inner_html = btn.get_attribute("innerHTML")
+                        if "Just Reset" in txt or "bi-arrow-clockwise" in inner_html:
+                            found_match = True
+                            print(f"  [√] 匹配到目标按钮 (索引 {idx}): text='{txt}', class='{btn.get_attribute('class')}'")
+                    except Exception:
+                        pass
+                if not found_match:
+                    print("  [×] 未通过常规遍历直接捕捉到目标文字，尝试通过选择器直接查找...")
+            except Exception as e:
+                print(f"  [!] 诊断遍历过程出现异常: {e}")
+            print("=" * 40)
+
+            # 等待目标按钮可见
             sb.wait_for_element(just_reset_selector, timeout=15)
             
-            try:
-                # 获取原生 WebElement 对象以供动作链使用
-                element = sb.find_element(just_reset_selector)
-                sb.hover(just_reset_selector)
-                time.sleep(0.5)
-                
-                from selenium.webdriver.common.action_chains import ActionChains
-                actions = ActionChains(sb.driver)
-                actions.move_to_element(element).click().perform()
-                print("[INFO] 已成功通过鼠标移动并点击 Just Reset 按钮。")
-            except Exception as e:
-                print(f"[WARN] 动作链点击异常，降级使用 JS 点击: {e}")
-                sb.driver.execute_script("""
-                    const buttons = Array.from(document.querySelectorAll('button'));
-                    const targetBtn = buttons.find(el => el.textContent.includes('Just Reset') || el.querySelector('.bi-arrow-clockwise'));
-                    if (targetBtn) {
-                        targetBtn.click();
-                    } else {
-                        throw new Error('未找到 Just Reset 按钮');
-                    }
-                """)
+            # 点击 Just Reset 按钮：采用纯净、安全的 JS 直接精准触发点击，彻底避免动作链连接断开问题
+            print("[INFO] 正在通过安全的 JS 脚本精准触发 Just Reset 按钮点击...")
+            clicked_success = sb.driver.execute_script("""
+                const buttons = Array.from(document.querySelectorAll('button'));
+                const targetBtn = buttons.find(el => el.textContent.includes('Just Reset') || el.innerHTML.includes('bi-arrow-clockwise'));
+                if (targetBtn) {
+                    targetBtn.click();
+                    return true;
+                }
+                return false;
+            """)
             
-            time.sleep(3)
+            if clicked_success:
+                print("[INFO] Just Reset 按钮已通过 JS 成功触发点击！")
+            else:
+                print("[WARN] JS 未能直接匹配，尝试使用备用 CSS 选择器点击...")
+                sb.click(just_reset_selector)
+            
+            time.sleep(4)
 
             # 读取 reset 后的剩余时间
             try:
