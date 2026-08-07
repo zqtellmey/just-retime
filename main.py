@@ -35,7 +35,7 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用成功项目的核心循环逻辑：物理点击 + 通过检测 checkbox 状态来判断是否通过"""
+    """采用成功项目的核心循环逻辑：物理点击 + 切换至 iframe 内部检测 checkbox 状态"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
@@ -55,21 +55,32 @@ def handle_cloudflare_turnstile(sb, step_name):
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
-            # 核心判断：检查 checkbox 是否已经被勾选 (checked 属性为 true) 或者 cf-turnstile-response 有值
+            # 核心判断：Cloudflare 验证组件在 iframe 内，通过 JS 遍历所有 iframe 检查内部的 checkbox 是否被勾选
             is_verified = False
             try:
                 is_verified = sb.driver.execute_script('''
-                    let checkbox = document.querySelector('input[type="checkbox"]');
                     let responseInput = document.querySelector('input[name="cf-turnstile-response"]');
-                    let isChecked = checkbox && checkbox.checked;
                     let hasToken = responseInput && responseInput.value && responseInput.value.trim().length > 0;
-                    return isChecked || hasToken;
+                    if (hasToken) return true;
+
+                    // 遍历所有 iframe 内部寻找 checkbox
+                    let frames = document.querySelectorAll('iframe');
+                    for (let frame of frames) {
+                        try {
+                            let frameDoc = frame.contentDocument || frame.contentWindow.document;
+                            let checkbox = frameDoc.querySelector('input[type="checkbox"]');
+                            if (checkbox && checkbox.checked) {
+                                return true;
+                            }
+                        } catch (e) {}
+                    }
+                    return false;
                 ''')
             except Exception:
                 pass
 
             if is_verified:
-                print(f"[INFO] ({step_name}) 验证成功！检测到人机验证复选框已被勾选或已生成 Token。")
+                print(f"[INFO] ({step_name}) 验证成功！检测到人机验证已通过。")
                 return True
             else:
                 print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: 验证尚未完成，准备重试...")
@@ -103,10 +114,7 @@ def debug_check_elements(sb):
         "邮箱输入框 (input[name='Email'])": "input[name='Email']",
         "密码输入框 (//*[@id='password'])": "//*[@id='password']",
         "密码输入框备用 (input[name='Password'])": "input[name='Password']",
-        "提交按钮 (button[type='submit'])": "button[type='submit']",
-        "人机复选框 (input[type='checkbox'])": "input[type='checkbox']",
-        "人机复选框(中文 aria-label)": "xpath://input[@type='checkbox' and contains(@aria-label, '验证')]",
-        "人机复选框(英文 aria-label)": "xpath://input[@type='checkbox' and (contains(@aria-label, 'human') or contains(@aria-label, 'verify'))]"
+        "提交按钮 (button[type='submit'])": "button[type='submit']"
     }
     
     for name, selector in selectors.items():
