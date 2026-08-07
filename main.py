@@ -35,36 +35,42 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用成功项目的核心循环逻辑：物理点击 + Token 密文状态检查"""
-    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
+    """优化的 Cloudflare 验证逻辑：优先检测成功文本或 Token 填充，避免过度报错"""
+    print(f"[INFO] ({step_name}) 开始检查 Cloudflare Turnstile 验证状态...")
     
     try:
         time.sleep(2)
-        result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
-        if not result:
-            print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
+        # 预先检查页面是否存在验证码组件
+        has_turnstile = sb.is_element_visible('input[name="cf-turnstile-response"]') or sb.is_element_visible('.cf-turnstile')
+        if not has_turnstile:
+            print(f"[INFO] ({step_name}) 未检测到 Turnstile 验证组件，直接通过。")
             return True
     except Exception:
         pass
 
+    # 循环尝试最多 3 次点击与检查
     for cf_attempt in range(3):
         try:
-            print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
-            sb.uc_gui_click_captcha()
-            time.sleep(5)
-            
-            cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
-            if cf_token_value and len(cf_token_value.strip()) > 0:
-                print(f"[INFO] ({step_name}) 验证成功！云盾 Token 令牌已顺利生成填充。")
+            # 检查是否已经出现了成功提示文本（支持中文“成功”或英文“Success”等关键词）
+            success_text_found = sb.is_text_visible("成功") or sb.is_text_visible("Success")
+            if success_text_found:
+                print(f"[INFO] ({step_name}) 检测到成功提示文本，验证已通过！")
                 return True
-            else:
-                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: Token 依然为空，准备重试...")
+
+            print(f"[INFO] ({step_name}) 发现验证拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
+            sb.uc_gui_click_captcha()
+            time.sleep(4)
+            
+            if sb.is_text_visible("成功") or sb.is_text_visible("Success"):
+                print(f"[INFO] ({step_name}) 点击后成功通过验证！")
+                return True
+                
         except Exception as e:
             print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
-        time.sleep(3)
+        time.sleep(2)
         
-    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到 Token 填充，尝试继续执行后续动作...")
+    print(f"[WARN] ({step_name}) 验证检查结束，继续执行后续流程...")
     return True
 
 def accept_cookies_if_present(sb):
@@ -165,29 +171,34 @@ def main():
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(2)
 
-            # 处理可能再次出现的验证
-            handle_cloudflare_turnstile(sb, "Reset弹窗")
+            # 【注意】Reset 弹窗中没有 Cloudflare 验证，直接跳过验证函数，防止产生不必要的错误日志！
+            print("[INFO] 已调出 Reset 弹窗，准备点击 Just Reset 按钮...")
 
-            # 点击 Just Reset 按钮：采用模拟物理鼠标移动到元素坐标并点击的方式
-            print("[INFO] 正在定位 Just Reset 按钮并执行鼠标移动到坐标点击...")
+            # 点击 Just Reset 按钮：先悬停再点击，结合原生 WebElement 动作链，失败则降级 JS 点击
+            print("[INFO] 正在定位 Just Reset 按钮并执行鼠标悬停与点击...")
             just_reset_selector = 'button:has(i.bi-arrow-clockwise)'
             sb.wait_for_element(just_reset_selector, timeout=15)
             
             try:
-                # 获取按钮元素并计算其在视口中的绝对坐标位置
+                # 获取原生 WebElement 对象以供动作链使用
                 element = sb.find_element(just_reset_selector)
+                sb.hover(just_reset_selector)
+                time.sleep(0.5)
                 
-                # 使用 Selenium 内置的 ActionChains 模拟：移动到该元素中心点并点击
                 from selenium.webdriver.common.action_chains import ActionChains
                 actions = ActionChains(sb.driver)
-                actions.move_to_element(element).pause(0.5).click().perform()
+                actions.move_to_element(element).click().perform()
                 print("[INFO] 已成功通过鼠标移动并点击 Just Reset 按钮。")
             except Exception as e:
-                print(f"[WARN] 鼠标动作链点击异常，降级使用 JS 点击: {e}")
+                print(f"[WARN] 动作链点击异常，降级使用 JS 点击: {e}")
                 sb.driver.execute_script("""
                     const buttons = Array.from(document.querySelectorAll('button'));
                     const targetBtn = buttons.find(el => el.textContent.includes('Just Reset') || el.querySelector('.bi-arrow-clockwise'));
-                    if (targetBtn) targetBtn.click();
+                    if (targetBtn) {
+                        targetBtn.click();
+                    } else {
+                        throw new Error('未找到 Just Reset 按钮');
+                    }
                 """)
             
             time.sleep(3)
