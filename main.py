@@ -40,20 +40,19 @@ def draw_red_dot_on_screenshot(image_path, x, y, radius=15):
     """在指定坐标 (x, y) 处画一个醒目的红点，用于可视化点击位置"""
     try:
         if not os.path.exists(image_path):
-            print(f"[WARN] 截图文件不存在，无法画红点: {image_path}")
             return
         img = Image.open(image_path)
         draw = ImageDraw.Draw(img)
-        # 绘制红色实心圆圈，带有白色外框使其更明显
         draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill="red", outline="white", width=4)
         img.save(image_path)
-        print(f"[DEBUG] 成功在截图坐标 ({x}, {y}) 处绘制红点。")
+        print(f"[DEBUG] 成功在校准坐标 ({x}, {y}) 处绘制红点。")
     except Exception as e:
         print(f"[WARN] 绘制红点失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name=""):
     """
-    带红点调试的过 CF 人机验证逻辑
+    带坐标校准的过 CF 人机验证逻辑
+    针对弹窗环境，自动对 iframe 坐标进行向下偏移校准，精确点击复选框
     """
     prefix = f"({step_name}) " if step_name else ""
     screenshot_path = "step_screenshot.png"
@@ -65,49 +64,56 @@ def handle_cloudflare_turnstile(sb, step_name=""):
             print(f"[INFO] {prefix}未检测到 Turnstile 拦截或已自动通过。")
             return True
         
-        print(f"[INFO] {prefix}发现 Turnstile 拦截，准备执行物理 GUI 点击...")
+        print(f"[INFO] {prefix}发现 Turnstile 拦截，准备进行精准坐标校准点击...")
 
-        # 🎯 【红点测试】无论如何，先在当前视口正中央 (960, 540) 强制画一个红点发送，测试红点功能
-        try:
-            sb.save_screenshot(screenshot_path)
-            # 1920x1080 的正中央是 (960, 540)
-            draw_red_dot_on_screenshot(screenshot_path, 960, 540)
-            send_telegram_message(f"🔴 <b>[红点功能自检]</b> 屏幕正中央 (960, 540) 红点测试推送 - {step_name}", screenshot_path)
-        except Exception as test_draw_err:
-            print(f"[DEBUG] 自检红点绘制失败: {test_draw_err}")
-
-        # 尝试通过 JS 获取当前 Turnstile 容器的绝对坐标并在其位置画红点
+        # 🎯 核心校准逻辑：获取 Turnstile 容器坐标，并根据弹窗布局进行像素偏移修正
+        target_x, target_y = None, None
         try:
             box_coords = sb.driver.execute_script("""
                 const el = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
                 if (el) {
                     const rect = el.getBoundingClientRect();
                     return {
-                        x: Math.round(rect.left + rect.width / 2),
-                        y: Math.round(rect.top + rect.height / 2)
+                        left: rect.left,
+                        top: rect.top,
+                        width: rect.width,
+                        height: rect.height
                     };
                 }
                 return null;
             """)
             if box_coords:
-                sb.save_screenshot(screenshot_path)
-                draw_red_dot_on_screenshot(screenshot_path, box_coords['x'], box_coords['y'])
-                send_telegram_message(f"📍 <b>[验证码组件定位]</b> {step_name} 实际检测到的验证框坐标 ({box_coords['x']}, {box_coords['y']})", screenshot_path)
+                # 依据页面布局：iframe 中心偏上，我们需要将点击点往下、往左微调到复选框位置
+                # 根据截图 3.jpg 比例：复选框在 iframe 内部靠左侧中间
+                target_x = int(box_coords['left'] + box_coords['width'] * 0.25) # 往左偏一点到复选框
+                target_y = int(box_coords['top'] + box_coords['height'] * 0.5)  # 垂直居中
+                
+                print(f"[INFO] 计算出校准后的精准点击坐标: ({target_x}, {target_y})")
         except Exception as coord_err:
-            print(f"[DEBUG] 坐标预判失败: {coord_err}")
+            print(f"[DEBUG] 坐标计算失败: {coord_err}")
 
-        # 执行物理 GUI 点击
-        sb.uc_gui_click_captcha()
+        # 如果成功计算出校准坐标，直接使用 SeleniumBase 的底层 GUI 绝对坐标点击
+        if target_x and target_y:
+            sb.save_screenshot(screenshot_path)
+            draw_red_dot_on_screenshot(screenshot_path, target_x, target_y)
+            send_telegram_message(f"🎯 <b>[校准红点]</b> {step_name} 修正后的复选框点击位置", screenshot_path)
+
+            # 使用 SeleniumBase 的底层 GUI 点击指定绝对坐标
+            sb.uc_gui_click_x_y(target_x, target_y)
+        else:
+            # 降级使用默认点击
+            sb.uc_gui_click_captcha()
+
         time.sleep(3)
 
-        # 校验 Token 是否注入
+        # 校验 Token 是否注入成功
         token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
         if token and len(token.strip()) > 0:
-            print(f"[INFO] {prefix}GUI 点击成功，Token 已注入！")
+            print(f"[INFO] {prefix}校准点击成功，Token 已成功注入！")
             return True
 
-        # 2. 精准切入 Turnstile iframe 执行深层点击
-        print(f"[INFO] {prefix}GUI 点击未触发 Token，尝试精准切入 iframe 点击复选框...")
+        # 2. 备用降级：精准切入 iframe 内部点击
+        print(f"[INFO] {prefix}物理点击未生效，尝试切入 iframe 内部 DOM 点击...")
         iframes = sb.find_elements('iframe[src*="challenges.cloudflare.com"]')
         for idx, frame in enumerate(iframes):
             try:
@@ -115,28 +121,17 @@ def handle_cloudflare_turnstile(sb, step_name=""):
                 time.sleep(1)
                 
                 selectors = ['#challenge-stage', 'input[type="checkbox"]', '.ctp-checkbox-label', 'span.mark', '#cb-i']
-                clicked = False
                 for target_sel in selectors:
                     if sb.is_element_visible(target_sel):
-                        print(f"[INFO] {prefix}在 iframe[{idx}] 内部找到复选框 [{target_sel}]，执行精细点击...")
                         sb.uc_click(target_sel, reconnect_time=2)
-                        clicked = True
-                        time.sleep(3)
+                        time.sleep(2)
                         break
-                
-                if not clicked:
-                    sb.driver.execute_script('document.querySelector("input, label, span")?.click();')
-                    time.sleep(2)
 
                 sb.switch_to_parent_frame()
-                
                 token_check = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
                 if token_check and len(token_check.strip()) > 0:
-                    print(f"[INFO] {prefix}iframe[{idx}] 精准点击成功，Token 已注入！")
                     return True
-
-            except Exception as f_err:
-                print(f"[WARN] {prefix}切入 iframe[{idx}] 点击时捕获异常: {f_err}")
+            except Exception:
                 sb.switch_to_default_content()
 
         sb.switch_to_default_content()
