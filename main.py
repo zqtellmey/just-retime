@@ -150,8 +150,7 @@ def main():
             sb.open(TARGET_URL)
             time.sleep(5)
 
-            # 处理后台页面的 CF 验证
-            handle_cloudflare_turnstile(sb, "后台页")
+            # （后台页没有验证，已在此处移除多余的 handle_cloudflare_turnstile 调用）
 
             # 点击 Reset timer 按钮
             print("[INFO] 正在点击 Reset timer...")
@@ -159,7 +158,7 @@ def main():
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(3)
 
-            # 处理可能再次出现的验证
+            # 处理可能再次出现的验证（弹窗里的验证保留）
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
             # ==================== 查找并打印 Just Reset 按钮的完整 HTML ====================
