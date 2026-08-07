@@ -35,7 +35,7 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用成功项目的核心循环逻辑：物理点击 + Token密文状态检查 + 成功文本直接跳出"""
+    """采用成功项目的核心循环逻辑：物理点击 + Token 密文状态检查"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
@@ -48,23 +48,13 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    # 最多 3 次循环重试，每次检查是否有“成功！”文本、<span id="BKMH9">成功！</span> 或 Token 密文，一旦达成即刻跳出
+    # 最多 3 次循环重试，确保图块或点击交互能够顺利通过并吐出 Token
     for cf_attempt in range(3):
         try:
-            # 优先检查页面是否已经出现了“成功！”字样或目标 span 元素
-            if sb.is_text_visible("成功") or sb.is_text_visible("Success") or sb.is_element_visible('#BKMH9', timeout=1):
-                print(f"[INFO] ({step_name}) 检测到成功提示，人机验证已通过，提前结束循环！")
-                return True
-
             print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
-            # 再次检查成功状态
-            if sb.is_text_visible("成功") or sb.is_text_visible("Success") or sb.is_element_visible('#BKMH9', timeout=1):
-                print(f"[INFO] ({step_name}) 点击后检测到成功提示，人机验证已通过！")
-                return True
-
             # 核心判断：根据 input 内是否有 Token 密文来判定是否成功打勾
             cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
             if cf_token_value and len(cf_token_value.strip()) > 0:
@@ -181,42 +171,39 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 点击 Just Reset 按钮（高鲁棒性点击逻辑） ====================
-            print("[INFO] 正在点击 Just Reset 按钮...")
+            # ==================== 查找并点击 Just Reset 按钮（带详细输出与鲁棒性定位） ====================
+            print("[INFO] 正在查找 Just Reset 按钮...")
             
-            # 完美对齐你提供的元素特征：包含 bi-arrow-clockwise 图标且文本包含 Just Reset 的按钮
             just_reset_selectors = [
                 'xpath://button[contains(., "Just Reset") and .//i[contains(@class, "bi-arrow-clockwise")]]',
                 'xpath://button[contains(normalize-space(text()), "Just Reset")]',
                 'button:has(i.bi-arrow-clockwise)'
             ]
             
-            clicked_just_reset = False
+            found_element = None
+            used_selector = None
             for sel in just_reset_selectors:
                 try:
-                    if sb.is_element_visible(sel, timeout=3):
-                        btn_elem = sb.find_element(sel)
-                        # 强力滚动到视野中央并先后尝试常规点击、JS点击以及 ActionChains 点击，确保点击生效
-                        sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", btn_elem)
-                        time.sleep(1.5)
-                        
-                        try:
-                            sb.click(sel)
-                        except Exception:
-                            try:
-                                sb.driver.execute_script("arguments[0].click();", btn_elem)
-                            except Exception:
-                                sb.actions.move_to_element(btn_elem).click().perform()
-                                
-                        clicked_just_reset = True
-                        print(f"[INFO] Just Reset 按钮点击成功 (使用选择器: {sel})")
+                    print(f"[DEBUG] 尝试使用选择器查找: {sel}")
+                    elem = sb.find_element(sel, timeout=3)
+                    if elem:
+                        print(f"[INFO]  [√] 成功找到 Just Reset 按钮，匹配选择器: {sel}")
+                        found_element = elem
+                        used_selector = sel
                         break
                 except Exception:
-                    continue
+                    print(f"[INFO]  [×] 未找到: {sel}")
             
-            if not clicked_just_reset:
-                raise Exception("页面上未找到可点击的 Just Reset 按钮元素")
-                
+            if found_element:
+                print("[INFO] 正在点击 Just Reset 按钮...")
+                try:
+                    sb.click(used_selector)
+                except Exception:
+                    sb.driver.execute_script("arguments[0].click();", found_element)
+            else:
+                print("[ERROR] 所有选择器均未找到 Just Reset 按钮！")
+                raise Exception("未找到 Just Reset 按钮元素")
+
             time.sleep(3)
 
             # 读取 reset 后的剩余时间
