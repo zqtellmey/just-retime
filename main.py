@@ -17,9 +17,9 @@ FIXED_PASSWORD = os.getenv("FIXED_PASSWORD", "")
 # ======================================================================
 
 # ==================== 坐标调试区（专门针对 Reset 弹窗） ====================
-# 请在这里直接修改 X 和 Y 坐标，不断微调直到红点落在弹窗的 CHECKBOX 上
-DEBUG_X = 960
-DEBUG_Y = 540
+# 修改这里的 X 和 Y 坐标，单次运行只测试并点击一次，观察红点调整即可
+DEBUG_X = 435
+DEBUG_Y = 635
 # ======================================================================
 
 def send_telegram_message(message, image_path=None):
@@ -56,7 +56,7 @@ def draw_red_dot_on_screenshot(image_path, x, y, radius=15):
         print(f"[WARN] 绘制红点失败: {e}")
 
 def handle_login_turnstile(sb, step_name=""):
-    """登录页原有的正常验证逻辑（不使用红点调试）"""
+    """登录页原有的正常验证逻辑"""
     prefix = f"({step_name}) " if step_name else ""
     try:
         time.sleep(2)
@@ -73,7 +73,7 @@ def handle_login_turnstile(sb, step_name=""):
         return False
 
 def handle_popup_turnstile_debug(sb, step_name=""):
-    """专为 Reset 弹窗设计的红点调试与固定坐标点击逻辑"""
+    """专为 Reset 弹窗设计的单次红点调试与固定坐标点击逻辑"""
     prefix = f"({step_name}) " if step_name else ""
     screenshot_path = "step_screenshot.png"
     try:
@@ -83,13 +83,13 @@ def handle_popup_turnstile_debug(sb, step_name=""):
             print(f"[INFO] {prefix}未检测到 Turnstile 拦截或已自动通过。")
             return True
         
-        print(f"[INFO] {prefix}弹窗拦截触发，正在固定坐标 ({DEBUG_X}, {DEBUG_Y}) 处画红点并点击...")
+        print(f"[INFO] {prefix}弹窗拦截触发，执行单次红点测试，坐标: ({DEBUG_X}, {DEBUG_Y})")
 
-        # 1. 截图并画红点发给你
+        # 1. 截图并画红点发给你（只发一次）
         sb.save_screenshot(screenshot_path)
         draw_red_dot_on_screenshot(screenshot_path, DEBUG_X, DEBUG_Y)
         send_telegram_message(
-            f"🎯 <b>[弹窗坐标调试]</b> {step_name}\n"
+            f"🎯 <b>[弹窗坐标单次调试]</b>\n"
             f"<b>当前测试坐标: ({DEBUG_X}, {DEBUG_Y})</b>", 
             screenshot_path
         )
@@ -197,19 +197,10 @@ def main():
             sb.save_screenshot(screenshot_path)
             send_telegram_message("📸 【步骤 2/2】已点击 Reset timer 按钮，弹窗界面现场。", screenshot_path)
 
-            # Reset 弹窗人机验证重试机制（这里会触发专用的红点调试逻辑）
-            print("[INFO] 启动 Reset 弹窗人机验证调试...")
-            for cf_attempt in range(4):
-                handle_popup_turnstile_debug(sb, f"Reset 弹窗第 {cf_attempt + 1} 次")
-                
-                try:
-                    cf_token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
-                    if cf_token and len(cf_token.strip()) > 0:
-                        print("[INFO] Reset 弹窗 Turnstile Token 验证成功注入！")
-                        break
-                except Exception:
-                    pass
-                time.sleep(3)
+            # Reset 弹窗人机验证：只执行一次红点调试点击
+            print("[INFO] 触发 Reset 弹窗人机验证单次调试...")
+            handle_popup_turnstile_debug(sb, "Reset 弹窗调试")
+            time.sleep(3)
 
             # 查找并点击 Just Reset 按钮
             print("[INFO] 正在等待并查找 Just Reset 按钮...")
