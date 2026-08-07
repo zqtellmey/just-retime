@@ -171,8 +171,8 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 查找并点击 Just Reset 按钮（带详细输出与鲁棒性定位） ====================
-            print("[INFO] 正在查找 Just Reset 按钮...")
+            # ==================== 查找并打印 Just Reset 按钮的完整 HTML ====================
+            print("[INFO] 正在查找 Just Reset 按钮并输出其完整元素内容...")
             
             just_reset_selectors = [
                 'xpath://button[contains(., "Just Reset") and .//i[contains(@class, "bi-arrow-clockwise")]]',
@@ -187,7 +187,7 @@ def main():
                     print(f"[DEBUG] 尝试使用选择器查找: {sel}")
                     elem = sb.find_element(sel, timeout=3)
                     if elem:
-                        print(f"[INFO]  [√] 成功找到 Just Reset 按钮，匹配选择器: {sel}")
+                        print(f"[INFO]  [√] 成功找到按钮，匹配选择器: {sel}")
                         found_element = elem
                         used_selector = sel
                         break
@@ -195,6 +195,13 @@ def main():
                     print(f"[INFO]  [×] 未找到: {sel}")
             
             if found_element:
+                # 打印获取到的真实元素的 outerHTML，用来核对是不是你要的 Just Reset 按钮
+                outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
+                print("=" * 60)
+                print("[DEBUG] 捕获到的 Just Reset 按钮真实 HTML 内容如下：")
+                print(outer_html)
+                print("=" * 60)
+
                 print("[INFO] 正在点击 Just Reset 按钮...")
                 try:
                     sb.click(used_selector)
