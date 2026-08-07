@@ -92,13 +92,12 @@ def main():
             # 填写邮箱
             print("[INFO] 正在输入邮箱和密码...")
             sb.wait_for_element('input[name="Email"]', timeout=10)
-            sb.driver.execute_script(f'arguments[0].value = "{USER_EMAIL}"; arguments[0].dispatchEvent(new Event("input")); arguments[0].dispatchEvent(new Event("change"));', sb.find_element('input[name="Email"]'))
+            sb.type('input[name="Email"]', USER_EMAIL)
             time.sleep(1)
             
-            # 使用精准的 XPath //*[@id="password"] 填写密码并触发事件
+            # 使用 XPath //*[@id="password"] 填写密码
             sb.wait_for_element('xpath://*[@id="password"]', timeout=10)
-            pwd_elem = sb.find_element('xpath://*[@id="password"]')
-            sb.driver.execute_script(f'arguments[0].value = "{FIXED_PASSWORD}"; arguments[0].dispatchEvent(new Event("input")); arguments[0].dispatchEvent(new Event("change"));', pwd_elem)
+            sb.type('xpath://*[@id="password"]', FIXED_PASSWORD)
             time.sleep(1)
             
             # 处理登录页面的 CF 验证
