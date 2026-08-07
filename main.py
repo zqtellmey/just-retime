@@ -38,7 +38,7 @@ def send_telegram_message(message, image_path=None):
 def handle_cloudflare_turnstile(sb, step_name=""):
     """
     针对模态框弹窗强化的过 CF 人机验证逻辑
-    包含 GUI 点击与 iframe 深度切入双重保护
+    提供：GUI 点击 -> 智能定位 iframe 内部复选框精细点击 -> JS 模拟点击
     """
     prefix = f"({step_name}) " if step_name else ""
     try:
@@ -58,23 +58,51 @@ def handle_cloudflare_turnstile(sb, step_name=""):
         if token and len(token.strip()) > 0:
             return True
 
-        # 2. 若 GUI 点击因弹窗偏移失效，降级策略：查找 iframe 并进行切入点击
-        print(f"[INFO] {prefix}GUI 点击未触发 Token，尝试深度切入 Turnstile iframe...")
+        # 2. 精准切入 Turnstile iframe 执行深层点击
+        print(f"[INFO] {prefix}GUI 点击未触发 Token，尝试精准切入 iframe 点击复选框...")
         iframes = sb.find_elements('iframe[src*="challenges.cloudflare.com"]')
         for idx, frame in enumerate(iframes):
             try:
+                # 切入当前 iframe
                 sb.switch_to_frame(frame)
                 time.sleep(1)
-                # 尝试点击 iframe 内部的验证复选框
-                if sb.is_element_visible('#challenge-stage') or sb.is_element_visible('input[type="checkbox"]'):
-                    print(f"[INFO] {prefix}在 iframe[{idx}] 内部找到验证框，执行点击...")
-                    sb.click('body')
+                
+                # 在 iframe 内部寻找复选框热区（多个常用 selector 尝试）
+                selectors = [
+                    '#challenge-stage',
+                    'input[type="checkbox"]',
+                    '.ctp-checkbox-label',
+                    'span.mark',
+                    '#cb-i'
+                ]
+                
+                clicked = False
+                for target_sel in selectors:
+                    if sb.is_element_visible(target_sel):
+                        print(f"[INFO] {prefix}在 iframe[{idx}] 内部找到复选框 [{target_sel}]，执行精细点击...")
+                        sb.uc_click(target_sel, reconnect_time=2)
+                        clicked = True
+                        time.sleep(3)
+                        break
+                
+                if not clicked:
+                    # 如果未发现具体选择器，则尝试直接 JS 点击 iframe 内的 label/input
+                    sb.driver.execute_script('document.querySelector("input, label, span")?.click();')
                     time.sleep(2)
+
                 sb.switch_to_parent_frame()
+                
+                # 检查 Token 是否注入成功
+                token_check = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
+                if token_check and len(token_check.strip()) > 0:
+                    print(f"[INFO] {prefix}iframe[{idx}] 精准点击成功，Token 已注入！")
+                    return True
+
             except Exception as f_err:
-                print(f"[WARN] {prefix}切入 iframe[{idx}] 点击失败: {f_err}")
+                print(f"[WARN] {prefix}切入 iframe[{idx}] 点击时捕获异常: {f_err}")
                 sb.switch_to_default_content()
 
+        sb.switch_to_default_content()
         return True
     except Exception as e:
         print(f"[WARN] {prefix}执行 Turnstile 验证穿透时捕获到异常: {e}")
@@ -164,7 +192,6 @@ def main():
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=20)
             sb.click('button[aria-label="Reset timer"]')
 
-            # 💡 关键修改：多等待 4 秒，确保弹窗完全展开、动画结束、CF 控件完全装载
             print("[INFO] 等待 Reset 弹窗及 Turnstile 控件稳定加载...")
             time.sleep(4)
 
