@@ -54,11 +54,11 @@ def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
     try:
         print("[INFO] 检查是否存在 Cookie 询问框...")
-        # 使用鲁棒性强的 XPath 通过文本 "Accept All" 进行定位点击
-        accept_btn = sb.find_element('xpath://button[contains(normalize-space(text()), "Accept All")]', timeout=3)
-        if accept_btn:
+        # 使用你提供的精确 CSS 选择器定位 Cookie 确认按钮
+        cookie_btn = sb.find_element('button.cky-btn.cky-btn-accept', timeout=3)
+        if cookie_btn:
             print("[INFO] 发现 Cookie 询问框，正在点击 'Accept All'...")
-            sb.click('xpath://button[contains(normalize-space(text()), "Accept All")]')
+            sb.click('button.cky-btn.cky-btn-accept')
             time.sleep(1)
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
@@ -81,9 +81,15 @@ def main():
             # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
 
-            # 填写账号密码
+            # 填写账号密码（增加等待与滚动、聚焦保障，确保密码能正确填入）
+            print("[INFO] 正在输入邮箱和密码...")
             sb.type('input[name="Email"]', USER_EMAIL)
+            time.sleep(1)
+            
+            # 针对密码框做稳定性优化
+            sb.wait_for_element('input[name="Password"]', timeout=10)
             sb.type('input[name="Password"]', FIXED_PASSWORD)
+            time.sleep(1)
             
             # 处理登录页面的 CF 验证
             handle_cloudflare_turnstile(sb, "登录页")
