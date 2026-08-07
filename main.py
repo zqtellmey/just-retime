@@ -35,7 +35,7 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用成功项目的核心循环逻辑：物理点击 + 通过检测 id="BKMH9" 元素存在来判断成功与否（避免多语言环境文字差异）"""
+    """采用成功项目的核心循环逻辑：物理点击 + 多语言/ID 兼容的成功状态检查"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
@@ -55,20 +55,23 @@ def handle_cloudflare_turnstile(sb, step_name):
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
-            # 核心判断：仅根据 id="BKMH9" 元素是否存在来判定是否成功打勾（不依赖具体文本内容）
-            success_elem_present = False
+            # 核心判断：兼容检查 id="BKMH9" 元素，或文本中包含中英文成功提示 ("成功" / "Success")
+            success_matched = False
             try:
-                success_elem = sb.find_element('#BKMH9', timeout=2)
-                if success_elem:
-                    success_elem_present = True
+                # 1. 检查是否存在指定 id 元素
+                if sb.is_element_visible('#BKMH9', timeout=1):
+                    success_matched = True
+                # 2. 检查页面可见文本是否包含中文“成功”或英文“Success”
+                elif sb.is_text_visible("成功") or sb.is_text_visible("Success") or sb.is_text_visible("success"):
+                    success_matched = True
             except Exception:
                 pass
 
-            if success_elem_present:
-                print(f"[INFO] ({step_name}) 验证成功！检测到成功标志元素 (id=BKMH9)。")
+            if success_matched:
+                print(f"[INFO] ({step_name}) 验证成功！检测到人机通过标志。")
                 return True
             else:
-                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: 未检测到成功标志元素，准备重试...")
+                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: 尚未检测到成功标志，准备重试...")
         except Exception as e:
             print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
