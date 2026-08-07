@@ -35,16 +35,25 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """处理 Cloudflare Turnstile 人机验证"""
+    """处理 Cloudflare Turnstile 人机验证（增强版）"""
     try:
-        time.sleep(2)
+        time.sleep(3)
         result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
+            print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
             return True
         
-        print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击...")
-        sb.uc_gui_click_captcha()
-        time.sleep(5)
+        print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试使用物理 GUI 点击...")
+        for i in range(3):
+            try:
+                sb.uc_gui_click_captcha()
+                time.sleep(3)
+                passed = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value !== ""')
+                if passed:
+                    print(f"[INFO] ({step_name}) Turnstile 验证已成功通过！")
+                    return True
+            except Exception:
+                pass
         return True
     except Exception as e:
         print(f"[WARN] ({step_name}) 处理验证码异常: {e}")
@@ -54,7 +63,6 @@ def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
     try:
         print("[INFO] 检查是否存在 Cookie 询问框...")
-        # 使用你提供的精确 CSS 选择器定位 Cookie 确认按钮
         cookie_btn = sb.find_element('button.cky-btn.cky-btn-accept', timeout=3)
         if cookie_btn:
             print("[INFO] 发现 Cookie 询问框，正在点击 'Accept All'...")
@@ -81,14 +89,16 @@ def main():
             # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
 
-            # 填写账号密码（增加等待与滚动、聚焦保障，确保密码能正确填入）
+            # 填写邮箱
             print("[INFO] 正在输入邮箱和密码...")
-            sb.type('input[name="Email"]', USER_EMAIL)
+            sb.wait_for_element('input[name="Email"]', timeout=10)
+            sb.driver.execute_script(f'arguments[0].value = "{USER_EMAIL}"; arguments[0].dispatchEvent(new Event("input")); arguments[0].dispatchEvent(new Event("change"));', sb.find_element('input[name="Email"]'))
             time.sleep(1)
             
-            # 针对密码框做稳定性优化
-            sb.wait_for_element('input[name="Password"]', timeout=10)
-            sb.type('input[name="Password"]', FIXED_PASSWORD)
+            # 使用精准的 XPath //*[@id="password"] 填写密码并触发事件
+            sb.wait_for_element('xpath://*[@id="password"]', timeout=10)
+            pwd_elem = sb.find_element('xpath://*[@id="password"]')
+            sb.driver.execute_script(f'arguments[0].value = "{FIXED_PASSWORD}"; arguments[0].dispatchEvent(new Event("input")); arguments[0].dispatchEvent(new Event("change"));', pwd_elem)
             time.sleep(1)
             
             # 处理登录页面的 CF 验证
