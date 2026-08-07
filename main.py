@@ -90,15 +90,14 @@ def main():
             accept_cookies_if_present(sb)
 
             # 填写邮箱
-            print("[INFO] 正在输入邮箱...")
+            print("[INFO] 正在输入邮箱和密码...")
             sb.wait_for_element('input[name="Email"]', timeout=10)
             sb.type('input[name="Email"]', USER_EMAIL)
             time.sleep(1)
             
-            # 填写密码（改用更稳定的 CSS 选择器 #password，并确保元素可见）
-            print("[INFO] 正在输入密码...")
-            sb.wait_for_element('input[name="password"]', timeout=10)
-            sb.type('input[name="password"]', FIXED_PASSWORD)
+            # 使用 XPath //*[@id="password"] 填写密码
+            sb.wait_for_element('xpath://*[@id="password"]', timeout=10)
+            sb.type('xpath://*[@id="password"]', FIXED_PASSWORD)
             time.sleep(1)
             
             # 处理登录页面的 CF 验证
