@@ -71,7 +71,7 @@ def draw_red_marker_and_click(sb, x, y):
     js_marker = f"""
     (() => {{
         const marker = document.createElement('div');
-        marker.style.position = 'absolute';
+        marker.style.position = 'fixed';
         marker.style.left = '{x}px';
         marker.style.top = '{y}px';
         marker.style.width = '14px';
@@ -109,6 +109,9 @@ def main():
         screenshot_path = "step_screenshot.png"
         
         try:
+            # 锁定 1920x1080 尺寸以精准匹配 (1080, 725) 坐标
+            sb.set_window_size(1920, 1080)
+
             # ==================== 第一步：登录 ====================
             print("[INFO] 正在打开登录页面...")
             sb.open(LOGIN_URL)
@@ -148,8 +151,8 @@ def main():
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
             # ==================== 使用坐标点击 Just Reset 按钮（带红点） ====================
-            TARGET_X = 590
-            TARGET_Y = 795
+            TARGET_X = 1080
+            TARGET_Y = 725
             
             draw_red_marker_and_click(sb, TARGET_X, TARGET_Y)
             time.sleep(3)
