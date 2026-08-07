@@ -35,12 +35,11 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用成功项目的核心循环逻辑：物理点击 + 切换至 iframe 内部检测 checkbox 状态"""
+    """采用精简稳定的点击与放行逻辑"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
         time.sleep(2)
-        # 1:1 对齐成功项目的探测机制：检查是否存在验证框
         result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
             print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
@@ -48,48 +47,18 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    # 最多 3 次循环重试，确保图块或点击交互能够顺利通过
-    for cf_attempt in range(3):
+    for cf_attempt in range(2):
         try:
-            print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
+            print(f"[INFO] ({step_name}) 尝试物理 GUI 点击验证 (第 {cf_attempt + 1} 次)...")
             sb.uc_gui_click_captcha()
-            time.sleep(5)
-            
-            # 核心判断：Cloudflare 验证组件在 iframe 内，通过 JS 遍历所有 iframe 检查内部的 checkbox 是否被勾选
-            is_verified = False
-            try:
-                is_verified = sb.driver.execute_script('''
-                    let responseInput = document.querySelector('input[name="cf-turnstile-response"]');
-                    let hasToken = responseInput && responseInput.value && responseInput.value.trim().length > 0;
-                    if (hasToken) return true;
-
-                    // 遍历所有 iframe 内部寻找 checkbox
-                    let frames = document.querySelectorAll('iframe');
-                    for (let frame of frames) {
-                        try {
-                            let frameDoc = frame.contentDocument || frame.contentWindow.document;
-                            let checkbox = frameDoc.querySelector('input[type="checkbox"]');
-                            if (checkbox && checkbox.checked) {
-                                return true;
-                            }
-                        } catch (e) {}
-                    }
-                    return false;
-                ''')
-            except Exception:
-                pass
-
-            if is_verified:
-                print(f"[INFO] ({step_name}) 验证成功！检测到人机验证已通过。")
-                return True
-            else:
-                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: 验证尚未完成，准备重试...")
+            time.sleep(6)
+            print(f"[INFO] ({step_name}) 验证点击动作已完成，继续向下执行。")
+            return True
         except Exception as e:
             print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
-        time.sleep(3)
+        time.sleep(2)
         
-    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到验证完成，尝试继续执行后续动作...")
     return True
 
 def accept_cookies_if_present(sb):
@@ -105,7 +74,7 @@ def accept_cookies_if_present(sb):
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
 def debug_check_elements(sb):
-    """预先查找页面上的关键元素并输出结果，辅助排查"""
+    """预先查找页面上的关键元素并输出结果，集成 iframe 内的 CF 复选框/Token 元素排查"""
     print("=" * 40)
     print("[DEBUG] 开始检查页面元素定位状态：")
     
@@ -114,7 +83,8 @@ def debug_check_elements(sb):
         "邮箱输入框 (input[name='Email'])": "input[name='Email']",
         "密码输入框 (//*[@id='password'])": "//*[@id='password']",
         "密码输入框备用 (input[name='Password'])": "input[name='Password']",
-        "提交按钮 (button[type='submit'])": "button[type='submit']"
+        "提交按钮 (button[type='submit'])": "button[type='submit']",
+        "CF 响应 Token 隐藏框 (input[name='cf-turnstile-response'])": "input[name='cf-turnstile-response']"
     }
     
     for name, selector in selectors.items():
@@ -124,7 +94,29 @@ def debug_check_elements(sb):
                 print(f"  [√] {name} -> 查找成功")
         except Exception:
             print(f"  [×] {name} -> 未找到")
-            
+
+    # 针对 iframe 内部的 CF 元素进行独立检查
+    try:
+        cf_in_frame = sb.driver.execute_script('''
+            let responseInput = document.querySelector('input[name="cf-turnstile-response"]');
+            if (responseInput) return true;
+            let frames = document.querySelectorAll('iframe');
+            for (let frame of frames) {
+                try {
+                    let frameDoc = frame.contentDocument || frame.contentWindow.document;
+                    let checkbox = frameDoc.querySelector('input[type="checkbox"]');
+                    if (checkbox) return true;
+                } catch (e) {}
+            }
+            return false;
+        ''')
+        if cf_in_frame:
+            print("  [√] iframe 内部人机验证元素 (checkbox / 响应框) -> 查找成功")
+        else:
+            print("  [×] iframe 内部人机验证元素 (checkbox / 响应框) -> 未找到")
+    except Exception:
+        print("  [×] iframe 内部人机验证元素 (checkbox / 响应框) -> 未找到")
+
     print("=" * 40)
 
 def main():
@@ -164,7 +156,7 @@ def main():
             print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 处理登录页面的 CF 验证（应用新版循环校验机制）
+            # 处理登录页面的 CF 验证
             handle_cloudflare_turnstile(sb, "登录页")
 
             # 点击 Sign In 按钮
@@ -181,7 +173,7 @@ def main():
             sb.open(TARGET_URL)
             time.sleep(5)
 
-            # 处理后台页面的 CF 验证（应用新版循环校验机制）
+            # 处理后台页面的 CF 验证
             handle_cloudflare_turnstile(sb, "后台页")
 
             # 点击 Reset timer 按钮
