@@ -18,19 +18,24 @@ CHECKBOX_Y = 640
 # =================================================
 
 def send_telegram_message(message, image_path=None):
-    """发送消息到 Telegram"""
+    """发送消息和截图到 Telegram"""
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
+        print("[INFO] Telegram 未配置，跳过消息发送。")
         return
+    
     try:
         if image_path and os.path.exists(image_path):
             url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
             with open(image_path, "rb") as photo:
-                requests.post(url, data={"chat_id": TG_CHAT_ID, "caption": message}, files={"photo": photo}, timeout=15)
+                payload = {"chat_id": TG_CHAT_ID, "caption": message}
+                files = {"photo": photo}
+                requests.post(url, data=payload, files=files, timeout=15)
         else:
             url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-            requests.post(url, data={"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "HTML"}, timeout=15)
+            payload = {"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "HTML"}
+            requests.post(url, data=payload, timeout=15)
     except Exception as e:
-        print(f"[ERROR] Telegram 发送失败: {e}")
+        print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
@@ -64,7 +69,7 @@ def main():
             
             screenshot_path = "step_screenshot.png"
 
-            # ==================== 第一步：登录（保持原样） ====================
+            # ==================== 第一步：登录 ====================
             print(f"[INFO] 正在打开登录页面: {LOGIN_URL}")
             sb.driver.get(LOGIN_URL)
             time.sleep(5)
@@ -81,7 +86,7 @@ def main():
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
             time.sleep(2)
 
-            print("[INFO] 启动登录页 Cloudflare 人机验证检测...")
+            print("[INFO] 启动登录页验证检测...")
             for cf_attempt in range(3):
                 try:
                     if sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null'):
@@ -98,19 +103,28 @@ def main():
             sb.click('button[type="submit"]')
             time.sleep(5)
 
+            sb.save_screenshot(screenshot_path)
+            send_telegram_message("📸 【步骤 1/2】账号登录表单已提交。", screenshot_path)
+
             # ==================== 第二步：进入后台并重置 ====================
             print(f"[INFO] 正在跳转到目标页面: {TARGET_URL}")
             sb.driver.get(TARGET_URL)
             time.sleep(5)
 
+            sb.save_screenshot(screenshot_path)
+            send_telegram_message("📸 【步骤 2/2】已跳转至目标后台页面。", screenshot_path)
+
             print("[INFO] 正在点击 Reset timer...")
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=20)
             sb.click('button[aria-label="Reset timer"]')
 
-            print("[INFO] 等待 Reset 弹窗及 Turnstile 控件稳定加载...")
+            print("[INFO] 等待 Reset 弹窗加载...")
             time.sleep(4)
 
-            # Reset 弹窗人机验证：直接使用测好的固定坐标点击
+            sb.save_screenshot(screenshot_path)
+            send_telegram_message("📸 【步骤 2/2】已点击 Reset timer 按钮，弹窗界面现场。", screenshot_path)
+
+            # Reset 弹窗人机验证：直接点击固定坐标
             print(f"[INFO] 触发 Reset 弹窗人机验证，点击固定坐标: ({CHECKBOX_X}, {CHECKBOX_Y})")
             for cf_attempt in range(4):
                 try:
@@ -126,7 +140,7 @@ def main():
                 time.sleep(3)
 
             # 查找并点击 Just Reset 按钮
-            print("[INFO] 正在等待并查找 Just Reset 按钮...")
+            print("[INFO] 正在查找 Just Reset 按钮...")
             just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
             sb.wait_for_element(just_reset_selector, timeout=20)
             sb.click(just_reset_selector)
@@ -136,7 +150,6 @@ def main():
             try:
                 remaining_time_elem = sb.find_element('span.hidden.sm\\:inline')
                 remaining_time_text = remaining_time_elem.text
-                print(f"[INFO] 当前剩余时间: {remaining_time_text}")
             except Exception:
                 remaining_time_text = "未能成功获取剩余时间"
 
