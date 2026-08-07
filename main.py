@@ -36,24 +36,24 @@ def send_telegram_message(message, image_path=None):
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
-def draw_red_dot_on_screenshot(image_path, x, y, radius=10):
+def draw_red_dot_on_screenshot(image_path, x, y, radius=15):
     """在指定坐标 (x, y) 处画一个醒目的红点，用于可视化点击位置"""
     try:
         if not os.path.exists(image_path):
+            print(f"[WARN] 截图文件不存在，无法画红点: {image_path}")
             return
         img = Image.open(image_path)
         draw = ImageDraw.Draw(img)
-        # 绘制红色实心圆圈（带外发光效果由粗线条代替）
-        draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill="red", outline="white", width=3)
+        # 绘制红色实心圆圈，带有白色外框使其更明显
+        draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill="red", outline="white", width=4)
         img.save(image_path)
-        print(print(f"[DEBUG] 已在截图坐标 ({x}, {y}) 处绘制红点可视化标记。"))
+        print(f"[DEBUG] 成功在截图坐标 ({x}, {y}) 处绘制红点。")
     except Exception as e:
         print(f"[WARN] 绘制红点失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name=""):
     """
     带红点调试的过 CF 人机验证逻辑
-    每次准备 GUI 点击前，先捕获当前真实坐标并打上红点发送 Telegram 验证
     """
     prefix = f"({step_name}) " if step_name else ""
     screenshot_path = "step_screenshot.png"
@@ -67,7 +67,16 @@ def handle_cloudflare_turnstile(sb, step_name=""):
         
         print(f"[INFO] {prefix}发现 Turnstile 拦截，准备执行物理 GUI 点击...")
 
-        # 🎯 尝试通过 JS 获取当前 Turnstile 容器的屏幕绝对坐标，用于在图上画红点
+        # 🎯 【红点测试】无论如何，先在当前视口正中央 (960, 540) 强制画一个红点发送，测试红点功能
+        try:
+            sb.save_screenshot(screenshot_path)
+            # 1920x1080 的正中央是 (960, 540)
+            draw_red_dot_on_screenshot(screenshot_path, 960, 540)
+            send_telegram_message(f"🔴 <b>[红点功能自检]</b> 屏幕正中央 (960, 540) 红点测试推送 - {step_name}", screenshot_path)
+        except Exception as test_draw_err:
+            print(f"[DEBUG] 自检红点绘制失败: {test_draw_err}")
+
+        # 尝试通过 JS 获取当前 Turnstile 容器的绝对坐标并在其位置画红点
         try:
             box_coords = sb.driver.execute_script("""
                 const el = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
@@ -81,10 +90,9 @@ def handle_cloudflare_turnstile(sb, step_name=""):
                 return null;
             """)
             if box_coords:
-                # 截取当前画面并打上红点
                 sb.save_screenshot(screenshot_path)
                 draw_red_dot_on_screenshot(screenshot_path, box_coords['x'], box_coords['y'])
-                send_telegram_message(f"🔴 <b>[点击坐标调试]</b> {step_name} 预判点击位置已用红点标出。", screenshot_path)
+                send_telegram_message(f"📍 <b>[验证码组件定位]</b> {step_name} 实际检测到的验证框坐标 ({box_coords['x']}, {box_coords['y']})", screenshot_path)
         except Exception as coord_err:
             print(f"[DEBUG] 坐标预判失败: {coord_err}")
 
@@ -92,7 +100,7 @@ def handle_cloudflare_turnstile(sb, step_name=""):
         sb.uc_gui_click_captcha()
         time.sleep(3)
 
-        # 校验 GUI 点击是否成功注入 Token
+        # 校验 Token 是否注入
         token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
         if token and len(token.strip()) > 0:
             print(f"[INFO] {prefix}GUI 点击成功，Token 已注入！")
