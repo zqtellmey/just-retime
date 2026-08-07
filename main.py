@@ -16,13 +16,12 @@ USER_EMAIL = os.getenv("USER_EMAIL", "")
 FIXED_PASSWORD = os.getenv("FIXED_PASSWORD", "")
 # ======================================================================
 
-# ==================== 坐标手动校准区 ====================
-# 如果红点没对准 checkbox，请微调这两个数值：
-# OFFSET_X: 正数往右，负数往左
-# OFFSET_Y: 正数往下，负数往上
-OFFSET_X = -50  
-OFFSET_Y = 100  
-# ======================================================
+# ==================== 坐标调试区 ====================
+# 直接修改这两个绝对坐标，红点和点击操作都会固定在这里
+# 观察红点截图，不断微调这两个数值，直到红点准确落在 CHECKBOX 上
+DEBUG_X = 960
+DEBUG_Y = 540
+# ==================================================
 
 def send_telegram_message(message, image_path=None):
     """发送消息和可选的截图到 Telegram"""
@@ -53,13 +52,13 @@ def draw_red_dot_on_screenshot(image_path, x, y, radius=15):
         draw = ImageDraw.Draw(img)
         draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill="red", outline="white", width=4)
         img.save(image_path)
-        print(f"[DEBUG] 已在校准坐标 ({x}, {y}) 处绘制红点。")
+        print(f"[DEBUG] 已在调试坐标 ({x}, {y}) 处绘制红点。")
     except Exception as e:
         print(f"[WARN] 绘制红点失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name=""):
     """
-    带手动坐标偏移校准的 CF 验证逻辑
+    直接使用固定 DEBUG_X 和 DEBUG_Y 坐标进行红点测试与点击
     """
     prefix = f"({step_name}) " if step_name else ""
     screenshot_path = "step_screenshot.png"
@@ -71,75 +70,30 @@ def handle_cloudflare_turnstile(sb, step_name=""):
             print(f"[INFO] {prefix}未检测到 Turnstile 拦截或已自动通过。")
             return True
         
-        print(f"[INFO] {prefix}发现 Turnstile 拦截，准备应用手动偏移坐标进行点击...")
+        print(f"[INFO] {prefix}发现 Turnstile 拦截，正在指定坐标 ({DEBUG_X}, {DEBUG_Y}) 处画红点并点击...")
 
-        # 🎯 核心校准逻辑：获取 iframe 中心，并加上手动偏移量
-        try:
-            box_coords = sb.driver.execute_script("""
-                const el = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-                if (el) {
-                    const rect = el.getBoundingClientRect();
-                    return {
-                        x: Math.round(rect.left + rect.width / 2),
-                        y: Math.round(rect.top + rect.height / 2)
-                    };
-                }
-                return null;
-            """)
-            
-            if box_coords:
-                final_x = box_coords['x'] + OFFSET_X
-                final_y = box_coords['y'] + OFFSET_Y
-                
-                # 截取画面并打上红点发送
-                sb.save_screenshot(screenshot_path)
-                draw_red_dot_on_screenshot(screenshot_path, final_x, final_y)
-                send_telegram_message(f"🎯 <b>[坐标校准]</b> {step_name} 偏移量({OFFSET_X}, {OFFSET_Y})后的红点位置", screenshot_path)
+        # 2. 立即截图并画红点发送到 Telegram 供你观察
+        sb.save_screenshot(screenshot_path)
+        draw_red_dot_on_screenshot(screenshot_path, DEBUG_X, DEBUG_Y)
+        send_telegram_message(
+            f"🎯 <b>[坐标调试]</b> {step_name}\n"
+            f"<b>当前测试坐标: ({DEBUG_X}, {DEBUG_Y})</b>", 
+            screenshot_path
+        )
 
-                print(f"[INFO] 执行精准校准点击: ({final_x}, {final_y})")
-                sb.uc_gui_click_x_y(final_x, final_y)
-            else:
-                print(f"[WARN] 未能捕获到 iframe 基础坐标，降级使用默认点击...")
-                sb.uc_gui_click_captcha()
-        except Exception as coord_err:
-            print(f"[DEBUG] 坐标校准计算失败: {coord_err}")
-            sb.uc_gui_click_captcha()
-
+        # 3. 执行物理 GUI 点击
+        sb.uc_gui_click_x_y(DEBUG_X, DEBUG_Y)
         time.sleep(3)
 
-        # 校验 Token 是否注入成功
+        # 4. 校验 Token 是否注入成功
         token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
         if token and len(token.strip()) > 0:
-            print(f"[INFO] {prefix}校准点击成功，Token 已成功注入！")
+            print(f"[INFO] {prefix}坐标 ({DEBUG_X}, {DEBUG_Y}) 点击成功，Token 已注入！")
             return True
 
-        # 2. 备用降级：精准切入 iframe 内部点击
-        print(f"[INFO] {prefix}物理 GUI 点击未触发 Token，尝试切入 iframe 内部 DOM 点击...")
-        iframes = sb.find_elements('iframe[src*="challenges.cloudflare.com"]')
-        for idx, frame in enumerate(iframes):
-            try:
-                sb.switch_to_frame(frame)
-                time.sleep(1)
-                
-                selectors = ['#challenge-stage', 'input[type="checkbox"]', '.ctp-checkbox-label', 'span.mark', '#cb-i']
-                for target_sel in selectors:
-                    if sb.is_element_visible(target_sel):
-                        sb.uc_click(target_sel, reconnect_time=2)
-                        time.sleep(2)
-                        break
-
-                sb.switch_to_parent_frame()
-                token_check = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
-                if token_check and len(token_check.strip()) > 0:
-                    return True
-            except Exception:
-                sb.switch_to_default_content()
-
-        sb.switch_to_default_content()
         return True
     except Exception as e:
         print(f"[WARN] {prefix}执行 Turnstile 验证穿透时捕获到异常: {e}")
-        sb.switch_to_default_content()
         return False
 
 def accept_cookies_if_present(sb):
