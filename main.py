@@ -18,8 +18,8 @@ FIXED_PASSWORD = os.getenv("FIXED_PASSWORD", "")
 
 # ==================== 坐标调试区（专门针对 Reset 弹窗） ====================
 # 修改这里的 X 和 Y 坐标，单次运行只测试并点击一次，观察红点调整即可
-DEBUG_X = 850
-DEBUG_Y = 635
+DEBUG_X = 825
+DEBUG_Y = 640
 # ======================================================================
 
 def send_telegram_message(message, image_path=None):
