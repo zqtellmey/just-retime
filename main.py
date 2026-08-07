@@ -35,8 +35,8 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """通过检测隐藏的 cf-turnstile-response 是否有 Token 来精准判断人机验证是否成功"""
-    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
+    """固定执行 3 次物理点击，每次间隔 3 秒，不判断成功与否直接进入下一步"""
+    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 基础穿透（固定尝试 3 次）...")
     
     try:
         time.sleep(2)
@@ -47,27 +47,17 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    # 最多循环 3 次，通过物理点击并检测 Token 是否生成
     for cf_attempt in range(3):
         try:
-            print(f"[INFO] ({step_name}) 尝试物理 GUI 点击验证 (第 {cf_attempt + 1} 次)...")
+            print(f"[INFO] ({step_name}) 尝试物理 GUI 点击验证 (第 {cf_attempt + 1}/3 次)...")
             sb.uc_gui_click_captcha()
-            
-            # 循环检查 Token 是否吐出（最多等待 6 秒）
-            for _ in range(6):
-                time.sleep(1)
-                token_val = sb.driver.execute_script('let el = document.querySelector("input[name=\'cf-turnstile-response\']"); return el ? el.value : "";')
-                if token_val and len(token_val.strip()) > 10:
-                    print(f"[INFO] ({step_name}) 验证成功！捕获到有效的 Cloudflare Token。")
-                    return True
-            
-            print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: Token 尚未生成，准备重试...")
         except Exception as e:
-            print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
+            print(f"[WARN] ({step_name}) 第 {cf_attempt + 1} 次点击异常: {e}")
         
-        time.sleep(2)
+        print(f"[INFO] ({step_name}) 等待 3 秒...")
+        time.sleep(3)
         
-    print(f"[WARN] ({step_name}) 经过多次重试未明确捕捉到 Token，强制继续执行后续动作...")
+    print(f"[INFO] ({step_name}) Turnstile 规定次数操作完成，继续执行后续动作。")
     return True
 
 def accept_cookies_if_present(sb):
@@ -83,7 +73,7 @@ def accept_cookies_if_present(sb):
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
 def debug_check_elements(sb):
-    """预先查找页面上的关键元素并输出结果，确保基础环境正常"""
+    """预先查找页面上的关键元素并输出结果，辅助排查"""
     print("=" * 40)
     print("[DEBUG] 开始检查页面元素定位状态：")
     
