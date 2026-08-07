@@ -48,11 +48,11 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    # 最多 3 次循环重试，每次检查是否有“成功！”文本或 Token 密文，一旦达成即刻跳出
+    # 最多 3 次循环重试，每次检查是否有“成功！”文本、<span id="BKMH9">成功！</span> 或 Token 密文，一旦达成即刻跳出
     for cf_attempt in range(3):
         try:
-            # 优先检查页面是否已经出现了“成功！”字样（兼容你提到的 <span id="BKMH9">成功！</span> 结构）
-            if sb.is_text_visible("成功") or sb.is_text_visible("Success"):
+            # 优先检查页面是否已经出现了“成功！”字样或目标 span 元素
+            if sb.is_text_visible("成功") or sb.is_text_visible("Success") or sb.is_element_visible('#BKMH9', timeout=1):
                 print(f"[INFO] ({step_name}) 检测到成功提示，人机验证已通过，提前结束循环！")
                 return True
 
@@ -60,8 +60,8 @@ def handle_cloudflare_turnstile(sb, step_name):
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
-            # 再次检查文本
-            if sb.is_text_visible("成功") or sb.is_text_visible("Success"):
+            # 再次检查成功状态
+            if sb.is_text_visible("成功") or sb.is_text_visible("Success") or sb.is_element_visible('#BKMH9', timeout=1):
                 print(f"[INFO] ({step_name}) 点击后检测到成功提示，人机验证已通过！")
                 return True
 
@@ -181,18 +181,42 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # 点击 Just Reset 按钮（采用安全健壮的点击逻辑，解决最后按钮点击无效问题）
-            print("[INFO] 正在点击 Just Reset...")
-            just_reset_selector = 'button:has(i.bi-arrow-clockwise)'
-            sb.wait_for_element(just_reset_selector, timeout=15)
-            try:
-                sb.click(just_reset_selector)
-            except Exception as e:
-                print(f"[WARN] 常规点击异常，尝试通过视口滚动及安全脚本点击: {e}")
-                btn_elem = sb.find_element(just_reset_selector)
-                sb.driver.execute_script("arguments[0].scrollIntoView(true);", btn_elem)
-                time.sleep(1)
-                sb.driver.execute_script("arguments[0].click();", btn_elem)
+            # ==================== 点击 Just Reset 按钮（高鲁棒性点击逻辑） ====================
+            print("[INFO] 正在点击 Just Reset 按钮...")
+            
+            # 完美对齐你提供的元素特征：包含 bi-arrow-clockwise 图标且文本包含 Just Reset 的按钮
+            just_reset_selectors = [
+                'xpath://button[contains(., "Just Reset") and .//i[contains(@class, "bi-arrow-clockwise")]]',
+                'xpath://button[contains(normalize-space(text()), "Just Reset")]',
+                'button:has(i.bi-arrow-clockwise)'
+            ]
+            
+            clicked_just_reset = False
+            for sel in just_reset_selectors:
+                try:
+                    if sb.is_element_visible(sel, timeout=3):
+                        btn_elem = sb.find_element(sel)
+                        # 强力滚动到视野中央并先后尝试常规点击、JS点击以及 ActionChains 点击，确保点击生效
+                        sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", btn_elem)
+                        time.sleep(1.5)
+                        
+                        try:
+                            sb.click(sel)
+                        except Exception:
+                            try:
+                                sb.driver.execute_script("arguments[0].click();", btn_elem)
+                            except Exception:
+                                sb.actions.move_to_element(btn_elem).click().perform()
+                                
+                        clicked_just_reset = True
+                        print(f"[INFO] Just Reset 按钮点击成功 (使用选择器: {sel})")
+                        break
+                except Exception:
+                    continue
+            
+            if not clicked_just_reset:
+                raise Exception("页面上未找到可点击的 Just Reset 按钮元素")
+                
             time.sleep(3)
 
             # 读取 reset 后的剩余时间
