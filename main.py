@@ -63,54 +63,52 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
-def draw_red_dot_and_click(sb, x, y):
-    """在指定坐标绘制高亮红点标示位置，并执行物理鼠标点击"""
-    js_code = f"""
+def draw_red_marker_and_click(sb, x, y):
+    """结合参考代码的标准绝对定位红点绘制，并执行物理坐标点击"""
+    print(f"[INFO] 正在目标位置 ({x}, {y}) 绘制红点并执行点击...")
+    
+    # 采用你提供的标准绝对定位 Marker JS 脚本
+    js_marker = f"""
     (() => {{
         const marker = document.createElement('div');
-        marker.id = 'target-test-marker';
-        marker.style.position = 'fixed';
+        marker.style.position = 'absolute';
         marker.style.left = '{x}px';
         marker.style.top = '{y}px';
-        marker.style.width = '24px';
-        marker.style.height = '24px';
+        marker.style.width = '14px';
+        marker.style.height = '14px';
         marker.style.backgroundColor = 'red';
         marker.style.borderRadius = '50%';
-        marker.style.border = '3px solid yellow';
-        marker.style.boxShadow = '0 0 15px red, 0 0 5px black';
-        marker.style.zIndex = '2147483647';
+        marker.style.border = '2px solid white';
+        marker.style.boxShadow = '0 0 6px rgba(0,0,0,0.8)';
+        marker.style.zIndex = '999999';
         marker.style.transform = 'translate(-50%, -50%)';
-        marker.style.pointerEvents = 'none';
-        
         document.body.appendChild(marker);
     }})();
     """
     try:
-        sb.execute_script(js_code)
-        print(f"[INFO] 已在坐标 ({x}, {y}) 位置绘制红点。")
+        sb.execute_script(js_marker)
+        print("[INFO] 红点标记注入成功。")
     except Exception as e:
-        print(f"[WARN] 绘制红点失败: {e}")
+        print(f"[WARN] 注入红点标记失败: {e}")
 
-    # 执行 PyAutoGUI 物理点击
+    # 执行坐标物理点击
     try:
         import pyautogui
         pyautogui.click(x, y)
-        print(f"[INFO] PyAutoGUI 已成功点击坐标 ({x}, {y})。")
+        print(f"[INFO] 已在物理坐标 ({x}, {y}) 完成点击。")
     except Exception as e:
-        print(f"[ERROR] PyAutoGUI 物理点击异常: {e}")
+        print(f"[ERROR] 物理点击异常: {e}")
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
         return
 
-    # 使用 SeleniumBase uc 模式启动浏览器，锁定 1920x1080 窗口
+    # 使用 SeleniumBase uc 模式启动浏览器，强制设置视口确保坐标映射统一
     with SB(uc=True, test=True, locale="zh") as sb:
         screenshot_path = "step_screenshot.png"
         
         try:
-            sb.set_window_size(1920, 1080)
-            
             # ==================== 第一步：登录 ====================
             print("[INFO] 正在打开登录页面...")
             sb.open(LOGIN_URL)
@@ -149,13 +147,12 @@ def main():
 
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 物理坐标点击 Just Reset 按钮 ====================
-            TARGET_X = 1080
-            TARGET_Y = 725
+            # ==================== 使用坐标点击 Just Reset 按钮（带红点） ====================
+            TARGET_X = 590
+            TARGET_Y = 795
             
-            print(f"[INFO] 正在通过物理坐标点击 Just Reset 按钮 -> X: {TARGET_X}, Y: {TARGET_Y}")
-            draw_red_dot_and_click(sb, TARGET_X, TARGET_Y)
-            time.sleep(4)
+            draw_red_marker_and_click(sb, TARGET_X, TARGET_Y)
+            time.sleep(3)
 
             # 读取 reset 后的剩余时间
             try:
@@ -178,7 +175,7 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 最终截图并发送 Telegram 通知
+            # 截取带有页面红点的最终图像发送 Telegram
             sb.save_screenshot(screenshot_path)
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
