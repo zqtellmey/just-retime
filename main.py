@@ -63,52 +63,61 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
-def draw_red_marker_and_click(sb, x, y):
-    """结合参考代码的标准绝对定位红点绘制，并执行物理坐标点击"""
-    print(f"[INFO] 正在目标位置 ({x}, {y}) 绘制红点并执行点击...")
-    
-    # 采用你提供的标准绝对定位 Marker JS 脚本
-    js_marker = f"""
-    (() => {{
+def test_draw_center_red_dot(sb):
+    """动态获取窗口尺寸并在正中心画一个强力高亮红点（固定在屏幕中央）"""
+    js_code = """
+    (() => {
+        // 1. 获取当前浏览器视口中心坐标
+        const centerX = window.innerWidth / 2;
+        const centerY = window.innerHeight / 2;
+        
+        // 2. 创建固定定位的红点，确保不受页面滚动影响
         const marker = document.createElement('div');
-        marker.style.position = 'absolute';
-        marker.style.left = '{x}px';
-        marker.style.top = '{y}px';
-        marker.style.width = '14px';
-        marker.style.height = '14px';
+        marker.id = 'center-test-marker';
+        marker.style.position = 'fixed';
+        marker.style.left = centerX + 'px';
+        marker.style.top = centerY + 'px';
+        marker.style.width = '30px';
+        marker.style.height = '30px';
         marker.style.backgroundColor = 'red';
         marker.style.borderRadius = '50%';
-        marker.style.border = '2px solid white';
-        marker.style.boxShadow = '0 0 6px rgba(0,0,0,0.8)';
-        marker.style.zIndex = '999999';
+        marker.style.border = '3px solid yellow';
+        marker.style.boxShadow = '0 0 15px red, 0 0 5px black';
+        marker.style.zIndex = '2147483647'; // 设为 32 位整型最大值，盖过所有 Modal 弹窗
         marker.style.transform = 'translate(-50%, -50%)';
+        marker.style.pointerEvents = 'none'; // 避免挡住真实点击
+        
         document.body.appendChild(marker);
-    }})();
+        
+        return {
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            centerX: centerX,
+            centerY: centerY
+        };
+    })();
     """
     try:
-        sb.execute_script(js_marker)
-        print("[INFO] 红点标记注入成功。")
+        res = sb.execute_script(js_code)
+        print(f"[INFO] 视口分辨率: {res['innerWidth']}x{res['innerHeight']}，红点已成功绘制在正中心: ({res['centerX']}, {res['centerY']})")
+        return res['centerX'], res['centerY']
     except Exception as e:
-        print(f"[WARN] 注入红点标记失败: {e}")
-
-    # 执行坐标物理点击
-    try:
-        import pyautogui
-        pyautogui.click(x, y)
-        print(f"[INFO] 已在物理坐标 ({x}, {y}) 完成点击。")
-    except Exception as e:
-        print(f"[ERROR] 物理点击异常: {e}")
+        print(f"[ERROR] 正中心红点绘制失败: {e}")
+        return None, None
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
         return
 
-    # 使用 SeleniumBase uc 模式启动浏览器，强制设置视口确保坐标映射统一
+    # 使用 SeleniumBase uc 模式启动浏览器，显式锁定 1920x1080 窗口以防尺寸异常
     with SB(uc=True, test=True, locale="zh") as sb:
         screenshot_path = "step_screenshot.png"
         
         try:
+            # 强制设定浏览器窗口尺寸，便于稳定观察
+            sb.set_window_size(1920, 1080)
+            
             # ==================== 第一步：登录 ====================
             print("[INFO] 正在打开登录页面...")
             sb.open(LOGIN_URL)
@@ -147,11 +156,19 @@ def main():
 
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 使用坐标点击 Just Reset 按钮（带红点） ====================
-            TARGET_X = 590
-            TARGET_Y = 795
+            # ==================== 测试：在屏幕正中间绘制红点 ====================
+            print("[INFO] 准备在屏幕正中心测试绘制红点...")
+            center_x, center_y = test_draw_center_red_dot(sb)
             
-            draw_red_marker_and_click(sb, TARGET_X, TARGET_Y)
+            if center_x and center_y:
+                # 尝试用物理鼠标点击中心点，验证坐标系统
+                try:
+                    import pyautogui
+                    pyautogui.click(center_x, center_y)
+                    print(f"[INFO] 已尝试点击中心红点坐标 ({center_x}, {center_y})。")
+                except Exception as e:
+                    print(f"[WARN] 物理点击中心红点异常: {e}")
+
             time.sleep(3)
 
             # 读取 reset 后的剩余时间
@@ -175,10 +192,10 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 截取带有页面红点的最终图像发送 Telegram
+            # 截取带有屏幕正中央红点的截图发往 Telegram
             sb.save_screenshot(screenshot_path)
             msg = (
-                f"【步骤 2/2】操作执行完成！\n"
+                f"【测试步骤】正中心红点测试完成！\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
                 f"▶️ Start按钮已点击: {'是' if start_clicked else '否'}"
             )
