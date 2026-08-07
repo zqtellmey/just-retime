@@ -63,8 +63,8 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
-def draw_red_dot(sb, x, y):
-    """仅在指定坐标位置绘制高亮红点（不点击）"""
+def draw_red_dot_and_click(sb, x, y):
+    """在指定坐标绘制高亮红点标示位置，并执行物理鼠标点击"""
     js_code = f"""
     (() => {{
         const marker = document.createElement('div');
@@ -78,18 +78,26 @@ def draw_red_dot(sb, x, y):
         marker.style.borderRadius = '50%';
         marker.style.border = '3px solid yellow';
         marker.style.boxShadow = '0 0 15px red, 0 0 5px black';
-        marker.style.zIndex = '2147483647'; // 设为最大值，确保覆盖弹窗
+        marker.style.zIndex = '2147483647';
         marker.style.transform = 'translate(-50%, -50%)';
-        marker.style.pointerEvents = 'none'; // 避免干扰
+        marker.style.pointerEvents = 'none';
         
         document.body.appendChild(marker);
     }})();
     """
     try:
         sb.execute_script(js_code)
-        print(f"[INFO] 已在坐标 ({x}, {y}) 位置绘制红点（仅标注，未点击）。")
+        print(f"[INFO] 已在坐标 ({x}, {y}) 位置绘制红点。")
     except Exception as e:
-        print(f"[ERROR] 绘制红点失败: {e}")
+        print(f"[WARN] 绘制红点失败: {e}")
+
+    # 执行 PyAutoGUI 物理点击
+    try:
+        import pyautogui
+        pyautogui.click(x, y)
+        print(f"[INFO] PyAutoGUI 已成功点击坐标 ({x}, {y})。")
+    except Exception as e:
+        print(f"[ERROR] PyAutoGUI 物理点击异常: {e}")
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
@@ -141,22 +149,44 @@ def main():
 
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 坐标标注测试 (Just Reset 按钮) ====================
-            # 根据 1920x1080 图像计算出的 Just Reset 按钮中心位置
+            # ==================== 物理坐标点击 Just Reset 按钮 ====================
             TARGET_X = 1080
             TARGET_Y = 725
             
-            print(f"[INFO] 正在尝试将红点对准 Just Reset 按钮 -> X: {TARGET_X}, Y: {TARGET_Y}")
-            draw_red_dot(sb, TARGET_X, TARGET_Y)
-            
-            # 暂不执行物理点击，留出时间观察
-            time.sleep(3)
+            print(f"[INFO] 正在通过物理坐标点击 Just Reset 按钮 -> X: {TARGET_X}, Y: {TARGET_Y}")
+            draw_red_dot_and_click(sb, TARGET_X, TARGET_Y)
+            time.sleep(4)
 
-            # 截取带红点的图像发送 Telegram 校准
+            # 读取 reset 后的剩余时间
+            try:
+                remaining_time_elem = sb.find_element('span.hidden.sm\\:inline')
+                remaining_time_text = remaining_time_elem.text
+                print(f"[INFO] 当前剩余时间: {remaining_time_text}")
+            except Exception:
+                remaining_time_text = "未能成功获取剩余时间"
+                print(f"[WARN] {remaining_time_text}")
+
+            # 检查 Start 按钮是否存在，存在则点击
+            start_clicked = False
+            try:
+                start_btn = sb.find_element('xpath://button[contains(normalize-space(text()), "Start")]')
+                if start_btn:
+                    print("[INFO] 发现 Start 按钮，正在点击...")
+                    sb.click('xpath://button[contains(normalize-space(text()), "Start")]')
+                    start_clicked = True
+                    time.sleep(3)
+            except Exception:
+                print("[INFO] 未发现 Start 按钮或当前无需点击。")
+
+            # 最终截图并发送 Telegram 通知
             sb.save_screenshot(screenshot_path)
-            msg = f"【坐标校准测试】红点已移动到坐标 ({TARGET_X}, {TARGET_Y})，请查看截图确认位置是否准确。"
+            msg = (
+                f"【步骤 2/2】操作执行完成！\n"
+                f"⏱️ 剩余时间: {remaining_time_text}\n"
+                f"▶️ Start按钮已点击: {'是' if start_clicked else '否'}"
+            )
             send_telegram_message(msg, screenshot_path)
-            print("[INFO] 截图发送完毕，待确认红点位置。")
+            print("[INFO] 所有步骤执行完毕！")
 
         except Exception as e:
             error_msg = f"[ERROR] 任务执行过程中发生异常: {str(e)}"
