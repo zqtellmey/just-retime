@@ -1,17 +1,18 @@
 import os
+import sys
 import time
 import requests
 from seleniumbase import SB
 
 # ==================== 配置项（从 GitHub Secrets 环境变量读取） ====================
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID")
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 
-LOGIN_URL = os.getenv("LOGIN_URL")
-TARGET_URL = os.getenv("TARGET_URL")
+LOGIN_URL = os.getenv("LOGIN_URL", "")
+TARGET_URL = os.getenv("TARGET_URL", "")
 
-USER_EMAIL = os.getenv("USER_EMAIL")
-FIXED_PASSWORD = os.getenv("FIXED_PASSWORD")
+USER_EMAIL = os.getenv("USER_EMAIL", "")
+FIXED_PASSWORD = os.getenv("FIXED_PASSWORD", "")
 # ======================================================================
 
 def send_telegram_message(message, image_path=None):
@@ -34,198 +35,123 @@ def send_telegram_message(message, image_path=None):
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
-def is_driver_alive(sb):
-    """检测 Selenium 驱动进程是否还活着，防止崩溃后发送无效指令"""
-    try:
-        _ = sb.driver.title
-        return True
-    except Exception:
-        return False
-
-def handle_cloudflare_turnstile(sb, step_name):
-    """保留物理 GUI 点击逻辑，并增加上下文切回保护，解决弹窗内物理点击导致驱动崩溃的问题"""
-    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
-    
-    if not is_driver_alive(sb):
-        print(f"[ERROR] ({step_name}) 浏览器驱动已失效，跳过过盾逻辑。")
-        return False
-
+def handle_cloudflare_turnstile(sb, step_name=""):
+    """
+    100% 参照 FalixNodes 项目的过 CF 人机验证逻辑
+    全盘 try...except 保护，物理点击失败也不会导致主程序崩溃
+    """
+    prefix = f"({step_name}) " if step_name else ""
     try:
         time.sleep(2)
-        # 检查是否存在验证框
+        # 探测页面是否存在 turnstile 验证框
         result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
-            print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
+            print(f"[INFO] {prefix}未检测到 Turnstile 拦截或已自动通过。")
             return True
-    except Exception:
-        pass
-
-    for cf_attempt in range(3):
-        if not is_driver_alive(sb):
-            print(f"[WARN] ({step_name}) 驱动已断开，停止重试。")
-            break
-
-        try:
-            print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
-            
-            # 依然使用你项目中可用的物理 GUI 点击
-            sb.uc_gui_click_captcha()
-            
-            # 【关键修复】：点击后强制切回主页面 DOM 上下文，防止在 DIV 弹窗 iframe 内被销毁导致驱动挂掉
-            try:
-                sb.driver.switch_to.default_content()
-            except Exception:
-                pass
-
-            time.sleep(4)
-            
-            if is_driver_alive(sb):
-                cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
-                if cf_token_value and len(cf_token_value.strip()) > 0:
-                    print(f"[INFO] ({step_name}) 验证成功！云盾 Token 令牌已顺利生成填充。")
-                    return True
-                else:
-                    print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: Token 依然为空，准备重试...")
-        except Exception as e:
-            print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
-        time.sleep(2)
-        
-    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到 Token 填充，尝试继续执行后续动作...")
-    return True
+        print(f"[INFO] {prefix}发现 Turnstile 拦截，尝试物理 GUI 点击...")
+        sb.uc_gui_click_captcha()
+        time.sleep(5)
+        return True
+    except Exception as e:
+        print(f"[WARN] {prefix}执行 Turnstile 验证穿透时捕获到异常: {e}")
+        return False
 
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
     try:
-        if is_driver_alive(sb) and sb.is_element_visible('button.cky-btn-accept'):
+        print("[INFO] 检查是否存在 Cookie 询问框...")
+        cookie_btn = sb.find_element('button.cky-btn-accept', timeout=3)
+        if cookie_btn:
             print("[INFO] 发现 Cookie 询问框，正在点击 'Accept All'...")
             sb.click('button.cky-btn-accept')
             time.sleep(2)
     except Exception:
-        pass
-
-def debug_check_elements(sb):
-    """预先查找页面上的关键元素并输出结果，辅助排查"""
-    if not is_driver_alive(sb):
-        return
-
-    print("=" * 40)
-    print("[DEBUG] 开始检查页面元素定位状态：")
-    
-    selectors = {
-        "Cookie 按钮 (button.cky-btn-accept)": "button.cky-btn-accept",
-        "邮箱输入框 (input[name='Email'])": "input[name='Email']",
-        "密码输入框 (//*[@id='password'])": "//*[@id='password']",
-        "密码输入框备用 (input[name='Password'])": "input[name='Password']",
-        "提交按钮 (button[type='submit'])": "button[type='submit']"
-    }
-    
-    for name, selector in selectors.items():
-        try:
-            if sb.is_element_visible(selector):
-                print(f"  [√] {name} -> 查找成功")
-            else:
-                print(f"  [×] {name} -> 未找到")
-        except Exception:
-            print(f"  [×] {name} -> 异常/未找到")
-            
-    print("=" * 40)
-
-def click_just_reset_button(sb, timeout=15):
-    """针对动态 DIV 弹窗中的 Just Reset 按钮进行多重精准匹配与点击"""
-    print("[INFO] 开始查找并点击弹窗中的 'Just Reset' 按钮...")
-    
-    js_find_and_click = """
-        const buttons = Array.from(document.querySelectorAll('button'));
-        const targetBtn = buttons.find(btn => btn.innerText && btn.innerText.includes('Just Reset'));
-        if (targetBtn) {
-            targetBtn.scrollIntoView({block: 'center'});
-            targetBtn.click();
-            return targetBtn.outerHTML;
-        }
-        return null;
-    """
-    
-    end_time = time.time() + timeout
-    while time.time() < end_time:
-        if not is_driver_alive(sb):
-            raise Exception("浏览器驱动已崩溃或断开连接，无法继续查找并点击 Just Reset。")
-
-        try:
-            # 优先使用 JS 方式全局检测文本匹配的按钮（绕过动画与模板注释屏蔽）
-            html_result = sb.driver.execute_script(js_find_and_click)
-            if html_result:
-                print("=" * 60)
-                print("[DEBUG] 成功找到并触发点击 Just Reset 按钮，真实 HTML 节点如下：")
-                print(html_result)
-                print("=" * 60)
-                return True
-        except Exception as e:
-            if "Connection refused" in str(e):
-                raise Exception("驱动连接已拒绝/断开。")
-            print(f"[DEBUG] 轮询查找 Just Reset 按钮中...")
-        
-        time.sleep(1)
-        
-    raise Exception(f"在 {timeout} 秒内未能定位并点击到 Just Reset 按钮。")
+        print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
-        return
+        sys.exit(1)
 
-    # 使用 SeleniumBase uc 模式启动浏览器
-    with SB(uc=True, test=True, locale="zh") as sb:
-        screenshot_path = "step_screenshot.png"
-        
-        try:
+    # 🎯 核心防崩配置：完全照搬 FalixNodes 项目的 SB 启动参数
+    opts = {
+        "uc": True,                 # 开启反爬穿透
+        "test": True,               # 开启测试防护模式，防止底层 CDP 握手崩溃
+        "locale": "zh",             # 语言偏好
+        "headed": False,            # 搭配 UC 模式最稳妥的后台渲染方式，不卡死 Display
+        "timeout_multiplier": 0.5   # 适当提升超时容忍度
+    }
+
+    print("🚀 正在初始化 SeleniumBase 环境...")
+
+    try:
+        with SB(**opts) as sb:
+            # 加上页面加载超时防护，防止打开 LOGIN_URL 时页面假死卡崩驱动
+            sb.driver.set_page_load_timeout(45)
+            sb.driver.set_window_size(1920, 1080)
+            
+            screenshot_path = "step_screenshot.png"
+
             # ==================== 第一步：登录 ====================
-            print("[INFO] 正在打开登录页面...")
-            sb.open(LOGIN_URL)
-            time.sleep(4)
+            print(f"[INFO] 正在打开登录页面: {LOGIN_URL}")
+            sb.driver.get(LOGIN_URL)
+            time.sleep(5)
 
-            # 处理可能挡住视线的 Cookie 询问框
+            # 处理 Cookie 询问框
             accept_cookies_if_present(sb)
-
-            # 运行元素预检
-            debug_check_elements(sb)
 
             # 填写邮箱
             print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=15)
             sb.type('input[name="Email"]', USER_EMAIL)
-            
-            print("[INFO] 延时 2 秒...")
             time.sleep(2)
-            
+
             # 填写密码
             print("[INFO] 正在输入密码...")
             sb.wait_for_element('//*[@id="password"]', timeout=15)
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
-            
-            print("[INFO] 延时 2 秒...")
             time.sleep(2)
-            
-            # 处理登录页面的 CF 验证
-            handle_cloudflare_turnstile(sb, "登录页")
+
+            # 尝试最多 3 次过 CF 验证
+            print("[INFO] 启动登录页 Cloudflare 人机验证检测...")
+            for cf_attempt in range(3):
+                handle_cloudflare_turnstile(sb, f"登录页第 {cf_attempt + 1} 次")
+                
+                # 检查 Token 是否注入成功
+                try:
+                    cf_token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
+                    if cf_token and len(cf_token.strip()) > 0:
+                        print("[INFO] 登录页 Turnstile Token 验证成功注入！")
+                        break
+                except Exception:
+                    pass
+                time.sleep(3)
 
             # 点击 Sign In 按钮
             print("[INFO] 正在点击登录按钮...")
             sb.click('button[type="submit"]')
-            time.sleep(4)
+            time.sleep(5)
 
             # 截图并发送 Telegram
-            if is_driver_alive(sb):
-                sb.save_screenshot(screenshot_path)
-                send_telegram_message("【步骤 1/2】账号登录成功，已过验证并提交表单。", screenshot_path)
+            sb.save_screenshot(screenshot_path)
+            send_telegram_message("【步骤 1/2】账号登录表单已提交。", screenshot_path)
 
             # ==================== 第二步：进入后台并重置 ====================
             print(f"[INFO] 正在跳转到目标页面: {TARGET_URL}")
-            sb.open(TARGET_URL)
+            sb.driver.get(TARGET_URL)
             time.sleep(5)
 
             # 处理后台页面的 CF 验证
-            handle_cloudflare_turnstile(sb, "后台页")
+            for cf_attempt in range(3):
+                handle_cloudflare_turnstile(sb, f"后台页第 {cf_attempt + 1} 次")
+                try:
+                    cf_token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
+                    if cf_token and len(cf_token.strip()) > 0:
+                        break
+                except Exception:
+                    pass
+                time.sleep(3)
 
             # 点击 Reset timer 按钮
             print("[INFO] 正在点击 Reset timer...")
@@ -233,11 +159,31 @@ def main():
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(3)
 
-            # 处理 Reset 弹窗内的 CF 验证（应用切回主页面保护）
-            handle_cloudflare_turnstile(sb, "Reset弹窗")
+            # 处理 Reset 弹窗可能出现的 CF 验证
+            handle_cloudflare_turnstile(sb, "Reset 弹窗")
 
-            # ==================== 查找并点击 Just Reset 按钮 ====================
-            click_just_reset_button(sb, timeout=15)
+            # 查找并点击 Just Reset 按钮
+            print("[INFO] 正在等待并查找 Just Reset 按钮...")
+            just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
+            
+            try:
+                sb.wait_for_element(just_reset_selector, timeout=10)
+                found_element = sb.find_element(just_reset_selector)
+                
+                if found_element:
+                    outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
+                    print("=" * 60)
+                    print("[DEBUG] 成功捕获到 Just Reset 按钮的 HTML：")
+                    print(outer_html)
+                    print("=" * 60)
+
+                    print("[INFO] 正在点击 Just Reset 按钮...")
+                    sb.click(just_reset_selector)
+                else:
+                    raise Exception("未找到元素对象")
+            except Exception as e:
+                print(f"[ERROR] 没能找到 Just Reset 按钮，异常原因: {e}")
+                raise Exception("未找到 Just Reset 按钮元素")
 
             time.sleep(3)
 
@@ -253,7 +199,8 @@ def main():
             # 检查 Start 按钮是否存在，存在则点击
             start_clicked = False
             try:
-                if sb.is_element_visible('xpath://button[contains(normalize-space(text()), "Start")]'):
+                start_btn = sb.find_element('xpath://button[contains(normalize-space(text()), "Start")]')
+                if start_btn:
                     print("[INFO] 发现 Start 按钮，正在点击...")
                     sb.click('xpath://button[contains(normalize-space(text()), "Start")]')
                     start_clicked = True
@@ -262,34 +209,31 @@ def main():
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
             # 最终截图并发送 Telegram 通知
-            if is_driver_alive(sb):
-                sb.save_screenshot(screenshot_path)
-            
+            sb.save_screenshot(screenshot_path)
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
-                f"▶️ Start按钮已点击: {'是' if start_clicked else '否'}"
+                f"▶️ Start 按钮已点击: {'是' if start_clicked else '否'}"
             )
-            send_telegram_message(msg, screenshot_path if os.path.exists(screenshot_path) else None)
-            print("[INFO] 所有步骤执行完毕！")
+            send_telegram_message(msg, screenshot_path)
+            print("[INFO] 所有步骤顺利执行完毕！")
 
-        except Exception as e:
-            error_msg = f"[ERROR] 任务执行过程中发生异常: {str(e)}"
-            print(error_msg)
+    except Exception as e:
+        error_msg = f"[ERROR] 任务执行过程中发生异常: {str(e)}"
+        print(error_msg)
+        screenshot_path = "step_screenshot.png"
+        try:
+            sb.save_screenshot(screenshot_path)
+            send_telegram_message(error_msg, screenshot_path)
+        except Exception:
+            send_telegram_message(error_msg)
+    finally:
+        screenshot_path = "step_screenshot.png"
+        if os.path.exists(screenshot_path):
             try:
-                if is_driver_alive(sb):
-                    sb.save_screenshot(screenshot_path)
-                    send_telegram_message(error_msg, screenshot_path)
-                else:
-                    send_telegram_message(error_msg)
+                os.remove(screenshot_path)
             except Exception:
-                send_telegram_message(error_msg)
-        finally:
-            if os.path.exists(screenshot_path):
-                try:
-                    os.remove(screenshot_path)
-                except Exception:
-                    pass
+                pass
 
 if __name__ == "__main__":
     main()
