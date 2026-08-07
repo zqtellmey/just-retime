@@ -168,21 +168,27 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # 点击 Just Reset 按钮（采用鼠标悬停移动 + JS 强制触发点击，确保 100% 触发）
-            print("[INFO] 正在查找并点击 Just Reset 按钮...")
+            # 点击 Just Reset 按钮：采用模拟物理鼠标移动到元素坐标并点击的方式
+            print("[INFO] 正在定位 Just Reset 按钮并执行鼠标移动到坐标点击...")
             just_reset_selector = 'button:has(i.bi-arrow-clockwise)'
             sb.wait_for_element(just_reset_selector, timeout=15)
             
             try:
-                # 方法 A：模拟鼠标移动到该元素上方并悬停，再进行点击
-                print("[INFO] 尝试通过鼠标移动悬停并点击...")
-                sb.move_to_element_and_click(just_reset_selector)
+                # 获取按钮元素并计算其在视口中的绝对坐标位置
+                element = sb.find_element(just_reset_selector)
+                
+                # 使用 Selenium 内置的 ActionChains 模拟：移动到该元素中心点并点击
+                from selenium.webdriver.common.action_chains import ActionChains
+                actions = ActionChains(sb.driver)
+                actions.move_to_element(element).pause(0.5).click().perform()
+                print("[INFO] 已成功通过鼠标移动并点击 Just Reset 按钮。")
             except Exception as e:
-                print(f"[WARN] 鼠标移动点击失败，尝试使用 JS 强制触发点击: {e}")
-                # 方法 B：通过 JavaScript 直接定位并点击该按钮
-                sb.driver.execute_script(
-                    'Array.from(document.querySelectorAll("button")).find(el => el.textContent.includes("Just Reset") || el.innerHTML.includes("bi-arrow-clockwise")).click();'
-                )
+                print(f"[WARN] 鼠标动作链点击异常，降级使用 JS 点击: {e}")
+                sb.driver.execute_script("""
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const targetBtn = buttons.find(el => el.textContent.includes('Just Reset') || el.querySelector('.bi-arrow-clockwise'));
+                    if (targetBtn) targetBtn.click();
+                """)
             
             time.sleep(3)
 
