@@ -67,9 +67,33 @@ def accept_cookies_if_present(sb):
         if cookie_btn:
             print("[INFO] 发现 Cookie 询问框，正在点击 'Accept All'...")
             sb.click('button.cky-btn-accept')
-            time.sleep(2) # 点击后延时 2 秒
+            time.sleep(2)
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
+
+def debug_check_elements(sb):
+    """预先查找页面上的关键元素并输出结果，辅助排查"""
+    print("=" * 40)
+    print("[DEBUG] 开始检查页面元素定位状态：")
+    
+    selectors = {
+        "Cookie 按钮 (button.cky-btn-accept)": "button.cky-btn-accept",
+        "邮箱输入框 (input[name='Email'])": "input[name='Email']",
+        "密码输入框 (//*[@id='password'])": "//*[@id='password']",
+        "密码输入框备用 (input[name='Password'])": "input[name='Password']",
+        "提交按钮 (button[type='submit'])": "button[type='submit']"
+    }
+    
+    for name, selector in selectors.items():
+        try:
+            # 极短超时测试元素是否存在
+            elem = sb.find_element(selector, timeout=2)
+            if elem:
+                print(f"  [√] {name} -> 查找成功")
+        except Exception:
+            print(f"  [×] {name} -> 未找到")
+            
+    print("=" * 40)
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
@@ -84,26 +108,27 @@ def main():
             # ==================== 第一步：登录 ====================
             print("[INFO] 正在打开登录页面...")
             sb.open(LOGIN_URL)
-            time.sleep(3)
+            time.sleep(4)
 
             # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
+
+            # 运行元素预检，将寻找结果输出到控制台
+            debug_check_elements(sb)
 
             # 填写邮箱
             print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=15)
             sb.type('input[name="Email"]', USER_EMAIL)
             
-            # --- 增加 2 秒延时，等待页面及焦点稳定 ---
             print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 填写密码：先额外等待元素出现并滚动到可见区域
+            # 填写密码
             print("[INFO] 正在输入密码...")
             sb.wait_for_element('//*[@id="password"]', timeout=15)
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
             
-            # --- 再次延时 2 秒，确保输入完成且触发可能的页面事件 ---
             print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
