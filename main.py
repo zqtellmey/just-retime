@@ -3,6 +3,7 @@ import sys
 import time
 import requests
 from seleniumbase import SB
+from PIL import Image, ImageDraw
 
 # ==================== 配置项 ====================
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
@@ -36,6 +37,19 @@ def send_telegram_message(message, image_path=None):
             requests.post(url, data=payload, timeout=15)
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
+
+def draw_red_dot_on_screenshot(image_path, x, y, radius=15):
+    """在指定坐标 (x, y) 处画一个醒目的红点，用于可视化点击位置"""
+    try:
+        if not os.path.exists(image_path):
+            return
+        img = Image.open(image_path)
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill="red", outline="white", width=4)
+        img.save(image_path)
+        print(f"[DEBUG] 已在固定坐标 ({x}, {y}) 处绘制红点。")
+    except Exception as e:
+        print(f"[WARN] 绘制红点失败: {e}")
 
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
@@ -124,19 +138,30 @@ def main():
             sb.save_screenshot(screenshot_path)
             send_telegram_message("📸 【步骤 2/2】已点击 Reset timer 按钮，弹窗界面现场。", screenshot_path)
 
-            # Reset 弹窗人机验证：直接点击固定坐标
-            print(f"[INFO] 触发 Reset 弹窗人机验证，点击固定坐标: ({CHECKBOX_X}, {CHECKBOX_Y})")
+            # Reset 弹窗人机验证：截图、画红点、发送 Telegram 并点击固定坐标
+            print(f"[INFO] 触发 Reset 弹窗人机验证，准备在固定坐标 ({CHECKBOX_X}, {CHECKBOX_Y}) 处画红点并点击")
             for cf_attempt in range(4):
                 try:
                     if sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null'):
+                        # 1. 截图并画红点发给你确认
+                        sb.save_screenshot(screenshot_path)
+                        draw_red_dot_on_screenshot(screenshot_path, CHECKBOX_X, CHECKBOX_Y)
+                        send_telegram_message(
+                            f"🎯 <b>[弹窗人机验证点击]</b>\n"
+                            f"正在点击固定坐标: ({CHECKBOX_X}, {CHECKBOX_Y})", 
+                            screenshot_path
+                        )
+
+                        # 2. 执行固定坐标点击
                         sb.uc_gui_click_x_y(CHECKBOX_X, CHECKBOX_Y)
                         time.sleep(3)
+
                         cf_token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
                         if cf_token and len(cf_token.strip()) > 0:
                             print("[INFO] Reset 弹窗 Token 验证成功注入！")
                             break
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[WARN] 弹窗验证点击异常: {e}")
                 time.sleep(3)
 
             # 查找并点击 Just Reset 按钮
