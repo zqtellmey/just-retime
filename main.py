@@ -130,6 +130,9 @@ def main():
             time.sleep(2)
             
             handle_cloudflare_turnstile(sb, "登录页")
+            # 增加 5 秒缓冲等待，确保人机验证服务器响应完成并打勾
+            print("[INFO] 等待 5 秒确保登录页 Turnstile 验证生效打勾...")
+            time.sleep(5)
 
             print("[INFO] 正在点击登录按钮...")
             sb.click('button[type="submit"]')
@@ -149,6 +152,9 @@ def main():
             time.sleep(3)
 
             handle_cloudflare_turnstile(sb, "Reset弹窗")
+            # 关键：在此处增加 5 秒等待，保证弹窗中的人机验证能够完全变为绿勾
+            print("[INFO] 等待 5 秒确保 Reset 弹窗 Turnstile 验证生效打勾...")
+            time.sleep(5)
 
             # ==================== 使用坐标点击 Just Reset 按钮（带红点） ====================
             TARGET_X = 1080
