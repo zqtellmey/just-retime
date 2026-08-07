@@ -96,6 +96,46 @@ def debug_check_elements(sb):
             
     print("=" * 40)
 
+def click_at_coordinates_with_red_dot(sb, x, y):
+    """在指定坐标执行点击，并在页面上生成一个醒目的红色圆点标记用于定位校准"""
+    print(f"[INFO] 正在执行坐标点击 -> X: {x}, Y: {y}")
+    
+    # 注入红点和点击逻辑
+    js_code = f"""
+    (function() {{
+        // 创建红点元素
+        var dot = document.createElement('div');
+        dot.style.position = 'fixed';
+        dot.style.left = '{x}px';
+        dot.style.top = '{y}px';
+        dot.style.width = '16px';
+        dot.style.height = '16px';
+        dot.style.backgroundColor = 'red';
+        dot.style.borderRadius = '50%';
+        dot.style.border = '2px solid white';
+        dot.style.boxShadow = '0 0 10px black';
+        dot.style.zIndex = '999999';
+        dot.style.transform = 'translate(-50%, -50%)';
+        document.body.appendChild(dot);
+    }})();
+    """
+    try:
+        sb.driver.execute_script(js_code)
+    except Exception:
+        pass
+    
+    # 稍微停顿 1 秒让你在截图里能清晰看清红点位置
+    time.sleep(1)
+    
+    # 使用 SeleniumBase 提供的 动作链基于视口坐标进行点击
+    try:
+        sb.click_coordinate(x, y)
+    except Exception:
+        # 备用坐标点击方案
+        actions = sb.get_action_chains()
+        actions.move_by_offset(x, y).click().perform()
+        actions.reset_actions()
+
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
@@ -159,65 +199,15 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 查找并打印 Just Reset 按钮的完整 HTML（支持跨 iframe/弹窗查找） ====================
-            print("[INFO] 正在等待并查找 Just Reset 按钮...")
+            # ==================== 使用坐标点击 Just Reset 按钮（带红点提示） ====================
+            print("[INFO] 准备通过坐标点击弹窗中的 Just Reset 按钮...")
             
-            found_element = None
-            start_time = time.time()
+            # 这里的坐标可以根据后续截图上的红点位置进行微调
+            TARGET_X = 590
+            TARGET_Y = 795
             
-            # 在 10 秒内循环穿透主文档及所有可能的 iframe 寻找弹窗内的按钮
-            while time.time() - start_time < 10:
-                try:
-                    # 先在主文档找
-                    found_element = sb.find_element('xpath://button[contains(., "Just Reset")]', timeout=1)
-                    if found_element:
-                        break
-                except Exception:
-                    pass
-                
-                # 如果主文档没找到，遍历页面上所有的 iframe 内部去寻找
-                try:
-                    frames = sb.driver.find_elements("tag name", "iframe")
-                    for index, frame in enumerate(frames):
-                        try:
-                            sb.driver.switch_to.frame(frame)
-                            found_element = sb.find_element('xpath://button[contains(., "Just Reset")]', timeout=1)
-                            if found_element:
-                                print(f"[INFO] 在第 {index + 1} 个 iframe 中成功定位到 Just Reset 按钮！")
-                                break
-                            sb.driver.switch_to.default_content()
-                        except Exception:
-                            sb.driver.switch_to.default_content()
-                    if found_element:
-                        break
-                except Exception:
-                    pass
-                
-                time.sleep(1)
-
-            if found_element:
-                try:
-                    outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
-                    print("=" * 60)
-                    print("[DEBUG] 成功捕获到 Just Reset 按钮的真实 HTML 内容如下：")
-                    print(outer_html)
-                    print("=" * 60)
-
-                    print("[INFO] 正在点击 Just Reset 按钮...")
-                    found_element.click()
-                except Exception as click_err:
-                    print(f"[WARN] 直接点击元素对象异常，尝试使用脚本点击: {click_err}")
-                    sb.driver.execute_script("arguments[0].click();", found_element)
-            else:
-                raise Exception("未找到 Just Reset 按钮元素（已穿透主文档及 iframe 检查）")
-
+            click_at_coordinates_with_red_dot(sb, TARGET_X, TARGET_Y)
             time.sleep(3)
-            
-            # 确保操作完后切回主文档上下文
-            try:
-                sb.driver.switch_to.default_content()
-            except Exception:
-                pass
 
             # 读取 reset 后的剩余时间
             try:
@@ -240,7 +230,7 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 最终截图并发送 Telegram 通知
+            # 最终截图并发送 Telegram 通知（带红点的截图会通过 Telegram 发送给你，方便你检查位置对不对）
             sb.save_screenshot(screenshot_path)
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
