@@ -159,32 +159,58 @@ def main():
             # 点击 Reset timer 之后触发 CF 人机验证处理
             handle_cloudflare_turnstile(sb, "Reset 弹窗")
 
-            # 查找并点击 Just Reset 按钮
-            print("[INFO] 正在等待并查找 Just Reset 按钮...")
-            just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
+            # ==================== 🧪 针对 h2 标题测试逻辑 ====================
+            print("\n" + "=" * 60)
+            print("🧪 正在测试查找 Reset 弹窗标题 h2 元素...")
             
-            try:
-                sb.wait_for_element(just_reset_selector, timeout=20)
-                found_element = sb.find_element(just_reset_selector)
+            # 多种候选定位器进行交叉匹配测试
+            test_selectors = [
+                ('XPath (包含部分文本)', '//h2[contains(text(), "Tired of resetting this timer")]'),
+                ('XPath (文本全匹配修剪)', '//h2[contains(normalize-space(.), "Tired of resetting this timer")]'),
+                ('CSS Selector (基于 Class)', 'h2.text-base.font-semibold'),
+                ('通用 h2 选择器', 'h2')
+            ]
+
+            target_found = False
+            for name, selector in test_selectors:
+                print(f"[TEST] 尝试使用 [{name}]: {selector}")
+                try:
+                    elem = sb.find_element(selector, timeout=5)
+                    if elem:
+                        outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", elem)
+                        elem_text = elem.text.strip()
+                        print("✅ 【查找成功！】")
+                        print(f"    - 标签文本: {elem_text}")
+                        print(f"    - 完整 HTML: {outer_html}")
+                        
+                        send_telegram_message(
+                            f"✅ <b>[测试成功]</b> 找到 h2 标题！\n"
+                            f"<b>匹配定位器:</b> <code>{name}</code>\n"
+                            f"<b>获取到的文本:</b> <code>{elem_text}</code>\n\n"
+                            f"<b>HTML 结构:</b>\n<code>{outer_html[:300]}</code>"
+                        )
+                        target_found = True
+                        break
+                except Exception as test_err:
+                    print(f"❌ 使用 [{name}] 未能获取到元素，原因: {test_err}")
+
+            if not target_found:
+                print("⚠️ [警告] 所有预设选择器均未找到 h2 元素！正在检查页面 DOM 中是否存在 iframe 或模态框层级...")
                 
-                if found_element:
-                    outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
-                    print("=" * 60)
-                    print("[DEBUG] 成功捕获到 Just Reset 按钮的 HTML：")
-                    print(outer_html)
-                    print("=" * 60)
+                # 检查当前页面所有 h2 标签的文本，协助排查
+                try:
+                    all_h2s = sb.find_elements("h2")
+                    print(f"[DEBUG] 当前页面共找到 {len(all_h2s)} 个 h2 标签：")
+                    for idx, h2 in enumerate(all_h2s):
+                        print(f"  h2[{idx}]: {h2.text}")
+                except Exception as debug_err:
+                    print(f"[DEBUG] 读取全局 h2 失败: {debug_err}")
 
-                    print("[INFO] 正在点击 Just Reset 按钮...")
-                    sb.click(just_reset_selector)
-                else:
-                    raise Exception("未找到元素对象")
-            except Exception as e:
-                # 📸 3. 查找按钮超时失败时截图推送 Telegram
                 sb.save_screenshot(screenshot_path)
-                send_telegram_message(f"⚠️ 【异常现场】查找 Just Reset 按钮失败！报错: {e}", screenshot_path)
-                raise Exception(f"未找到 Just Reset 按钮元素: {e}")
+                send_telegram_message("❌ <b>[测试失败]</b> 点击 Reset timer 后未找到包含 'Tired of resetting this timer?' 的 h2 标题元素！请检查推送的截图。", screenshot_path)
 
-            time.sleep(3)
+            print("=" * 60 + "\n")
+            # ==================================================================
 
             # 读取 reset 后的剩余时间
             try:
@@ -210,7 +236,7 @@ def main():
             # 最终截图并发送 Telegram 通知
             sb.save_screenshot(screenshot_path)
             msg = (
-                f"🎉 【步骤 2/2】操作执行完成！\n"
+                f"🎉 【步骤 2/2】测试流程执行完成！\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
                 f"▶️ Start 按钮已点击: {'是' if start_clicked else '否'}"
             )
