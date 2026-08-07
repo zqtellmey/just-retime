@@ -3,6 +3,7 @@ import sys
 import time
 import requests
 from seleniumbase import SB
+from PIL import Image, ImageDraw
 
 # ==================== 配置项（从 GitHub Secrets 环境变量读取） ====================
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
@@ -35,12 +36,27 @@ def send_telegram_message(message, image_path=None):
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
+def draw_red_dot_on_screenshot(image_path, x, y, radius=10):
+    """在指定坐标 (x, y) 处画一个醒目的红点，用于可视化点击位置"""
+    try:
+        if not os.path.exists(image_path):
+            return
+        img = Image.open(image_path)
+        draw = ImageDraw.Draw(img)
+        # 绘制红色实心圆圈（带外发光效果由粗线条代替）
+        draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill="red", outline="white", width=3)
+        img.save(image_path)
+        print(print(f"[DEBUG] 已在截图坐标 ({x}, {y}) 处绘制红点可视化标记。"))
+    except Exception as e:
+        print(f"[WARN] 绘制红点失败: {e}")
+
 def handle_cloudflare_turnstile(sb, step_name=""):
     """
-    针对模态框弹窗强化的过 CF 人机验证逻辑
-    提供：GUI 点击 -> 智能定位 iframe 内部复选框精细点击 -> JS 模拟点击
+    带红点调试的过 CF 人机验证逻辑
+    每次准备 GUI 点击前，先捕获当前真实坐标并打上红点发送 Telegram 验证
     """
     prefix = f"({step_name}) " if step_name else ""
+    screenshot_path = "step_screenshot.png"
     try:
         time.sleep(2)
         # 1. 探测主页面是否存在 turnstile 响应框
@@ -49,13 +65,37 @@ def handle_cloudflare_turnstile(sb, step_name=""):
             print(f"[INFO] {prefix}未检测到 Turnstile 拦截或已自动通过。")
             return True
         
-        print(f"[INFO] {prefix}发现 Turnstile 拦截，优先尝试物理 GUI 点击...")
+        print(f"[INFO] {prefix}发现 Turnstile 拦截，准备执行物理 GUI 点击...")
+
+        # 🎯 尝试通过 JS 获取当前 Turnstile 容器的屏幕绝对坐标，用于在图上画红点
+        try:
+            box_coords = sb.driver.execute_script("""
+                const el = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+                if (el) {
+                    const rect = el.getBoundingClientRect();
+                    return {
+                        x: Math.round(rect.left + rect.width / 2),
+                        y: Math.round(rect.top + rect.height / 2)
+                    };
+                }
+                return null;
+            """)
+            if box_coords:
+                # 截取当前画面并打上红点
+                sb.save_screenshot(screenshot_path)
+                draw_red_dot_on_screenshot(screenshot_path, box_coords['x'], box_coords['y'])
+                send_telegram_message(f"🔴 <b>[点击坐标调试]</b> {step_name} 预判点击位置已用红点标出。", screenshot_path)
+        except Exception as coord_err:
+            print(f"[DEBUG] 坐标预判失败: {coord_err}")
+
+        # 执行物理 GUI 点击
         sb.uc_gui_click_captcha()
         time.sleep(3)
 
         # 校验 GUI 点击是否成功注入 Token
         token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
         if token and len(token.strip()) > 0:
+            print(f"[INFO] {prefix}GUI 点击成功，Token 已注入！")
             return True
 
         # 2. 精准切入 Turnstile iframe 执行深层点击
@@ -63,19 +103,10 @@ def handle_cloudflare_turnstile(sb, step_name=""):
         iframes = sb.find_elements('iframe[src*="challenges.cloudflare.com"]')
         for idx, frame in enumerate(iframes):
             try:
-                # 切入当前 iframe
                 sb.switch_to_frame(frame)
                 time.sleep(1)
                 
-                # 在 iframe 内部寻找复选框热区（多个常用 selector 尝试）
-                selectors = [
-                    '#challenge-stage',
-                    'input[type="checkbox"]',
-                    '.ctp-checkbox-label',
-                    'span.mark',
-                    '#cb-i'
-                ]
-                
+                selectors = ['#challenge-stage', 'input[type="checkbox"]', '.ctp-checkbox-label', 'span.mark', '#cb-i']
                 clicked = False
                 for target_sel in selectors:
                     if sb.is_element_visible(target_sel):
@@ -86,13 +117,11 @@ def handle_cloudflare_turnstile(sb, step_name=""):
                         break
                 
                 if not clicked:
-                    # 如果未发现具体选择器，则尝试直接 JS 点击 iframe 内的 label/input
                     sb.driver.execute_script('document.querySelector("input, label, span")?.click();')
                     time.sleep(2)
 
                 sb.switch_to_parent_frame()
                 
-                # 检查 Token 是否注入成功
                 token_check = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
                 if token_check and len(token_check.strip()) > 0:
                     print(f"[INFO] {prefix}iframe[{idx}] 精准点击成功，Token 已注入！")
