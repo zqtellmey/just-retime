@@ -159,16 +159,44 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 查找并打印 Just Reset 按钮的完整 HTML ====================
+            # ==================== 查找并打印 Just Reset 按钮的完整 HTML（支持跨 iframe/弹窗查找） ====================
             print("[INFO] 正在等待并查找 Just Reset 按钮...")
             
-            just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
+            found_element = None
+            start_time = time.time()
             
-            try:
-                sb.wait_for_element(just_reset_selector, timeout=10)
-                found_element = sb.find_element(just_reset_selector)
+            # 在 10 秒内循环穿透主文档及所有可能的 iframe 寻找弹窗内的按钮
+            while time.time() - start_time < 10:
+                try:
+                    # 先在主文档找
+                    found_element = sb.find_element('xpath://button[contains(., "Just Reset")]', timeout=1)
+                    if found_element:
+                        break
+                except Exception:
+                    pass
                 
-                if found_element:
+                # 如果主文档没找到，遍历页面上所有的 iframe 内部去寻找
+                try:
+                    frames = sb.driver.find_elements("tag name", "iframe")
+                    for index, frame in enumerate(frames):
+                        try:
+                            sb.driver.switch_to.frame(frame)
+                            found_element = sb.find_element('xpath://button[contains(., "Just Reset")]', timeout=1)
+                            if found_element:
+                                print(f"[INFO] 在第 {index + 1} 个 iframe 中成功定位到 Just Reset 按钮！")
+                                break
+                            sb.driver.switch_to.default_content()
+                        except Exception:
+                            sb.driver.switch_to.default_content()
+                    if found_element:
+                        break
+                except Exception:
+                    pass
+                
+                time.sleep(1)
+
+            if found_element:
+                try:
                     outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
                     print("=" * 60)
                     print("[DEBUG] 成功捕获到 Just Reset 按钮的真实 HTML 内容如下：")
@@ -176,14 +204,20 @@ def main():
                     print("=" * 60)
 
                     print("[INFO] 正在点击 Just Reset 按钮...")
-                    sb.click(just_reset_selector)
-                else:
-                    raise Exception("未找到元素对象")
-            except Exception as e:
-                print(f"[ERROR] 没能找到 Just Reset 按钮，异常原因: {e}")
-                raise Exception("未找到 Just Reset 按钮元素")
+                    found_element.click()
+                except Exception as click_err:
+                    print(f"[WARN] 直接点击元素对象异常，尝试使用脚本点击: {click_err}")
+                    sb.driver.execute_script("arguments[0].click();", found_element)
+            else:
+                raise Exception("未找到 Just Reset 按钮元素（已穿透主文档及 iframe 检查）")
 
             time.sleep(3)
+            
+            # 确保操作完后切回主文档上下文
+            try:
+                sb.driver.switch_to.default_content()
+            except Exception:
+                pass
 
             # 读取 reset 后的剩余时间
             try:
