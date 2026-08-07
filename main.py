@@ -96,14 +96,18 @@ def debug_check_elements(sb):
             
     print("=" * 40)
 
-def click_at_coordinates_with_red_dot(sb, x, y):
-    """在指定坐标执行点击，并在页面上生成一个醒目的红色圆点标记用于定位校准"""
+def click_by_coordinates_with_red_dot(sb, x, y):
+    """使用 PyAutoGUI 进行绝对坐标物理点击，并在网页对应位置注入红点进行可视化标示"""
     print(f"[INFO] 正在执行坐标点击 -> X: {x}, Y: {y}")
     
-    # 注入红点并触发该坐标元素的点击事件
-    js_code = f"""
+    # 1. 在网页上通过 JS 注入红点标记，方便通过截图校准位置
+    dot_js = f"""
     (function() {{
+        var existingDot = document.getElementById('debug-click-red-dot');
+        if (existingDot) {{ existingDot.remove(); }}
+        
         var dot = document.createElement('div');
+        dot.id = 'debug-click-red-dot';
         dot.style.position = 'fixed';
         dot.style.left = '{x}px';
         dot.style.top = '{y}px';
@@ -116,17 +120,20 @@ def click_at_coordinates_with_red_dot(sb, x, y):
         dot.style.zIndex = '999999';
         dot.style.transform = 'translate(-50%, -50%)';
         document.body.appendChild(dot);
-
-        var targetElem = document.elementFromPoint({x}, {y});
-        if (targetElem) {{
-            targetElem.click();
-        }}
     }})();
     """
     try:
-        sb.execute_script(js_code)
+        sb.driver.execute_script(dot_js)
     except Exception as e:
-        print(f"[WARN] 坐标点击执行异常: {e}")
+        print(f"[WARN] 注入红点标记异常: {e}")
+
+    # 2. 使用 PyAutoGUI 执行物理鼠标点击
+    try:
+        import pyautogui
+        pyautogui.click(x, y)
+        print("[INFO] PyAutoGUI 物理坐标点击完成。")
+    except Exception as e:
+        print(f"[ERROR] PyAutoGUI 点击异常: {e}")
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
@@ -143,37 +150,25 @@ def main():
             sb.open(LOGIN_URL)
             time.sleep(4)
 
-            # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
-
-            # 运行元素预检
             debug_check_elements(sb)
 
-            # 填写邮箱
             print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=15)
             sb.type('input[name="Email"]', USER_EMAIL)
-            
-            print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 填写密码
             print("[INFO] 正在输入密码...")
             sb.wait_for_element('//*[@id="password"]', timeout=15)
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
-            
-            print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 处理登录页面的 CF 验证
             handle_cloudflare_turnstile(sb, "登录页")
 
-            # 点击 Sign In 按钮
             print("[INFO] 正在点击登录按钮...")
             sb.click('button[type="submit"]')
             time.sleep(4)
 
-            # 截图并发送 Telegram
             sb.save_screenshot(screenshot_path)
             send_telegram_message("【步骤 1/2】账号登录成功，已过验证并提交表单。", screenshot_path)
 
@@ -182,23 +177,21 @@ def main():
             sb.open(TARGET_URL)
             time.sleep(5)
 
-            # 点击 Reset timer 按钮
             print("[INFO] 正在点击 Reset timer...")
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=15)
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(3)
 
-            # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 使用坐标点击 Just Reset 按钮（带红点提示） ====================
-            print("[INFO] 准备通过坐标点击弹窗中的 Just Reset 按钮...")
+            # ==================== 使用坐标点击 Just Reset 按钮（带红点） ====================
+            print("[INFO] 准备通过绝对坐标点击弹窗中的 Just Reset 按钮...")
             
-            # 初始设定的坐标位置（可根据运行后的截图红点位置进行调整）
+            # 初始设定的坐标位置（可根据后续生成的截图红点位置进行调整）
             TARGET_X = 590
             TARGET_Y = 795
             
-            click_at_coordinates_with_red_dot(sb, TARGET_X, TARGET_Y)
+            click_by_coordinates_with_red_dot(sb, TARGET_X, TARGET_Y)
             time.sleep(3)
 
             # 读取 reset 后的剩余时间
@@ -222,7 +215,7 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 最终截图并发送 Telegram 通知
+            # 最终截图并发送 Telegram 通知（截图会带上红点位置，方便你后续调整 X 和 Y）
             sb.save_screenshot(screenshot_path)
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
