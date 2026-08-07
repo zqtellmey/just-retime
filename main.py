@@ -35,7 +35,7 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用成功项目的核心循环逻辑：物理点击 + Token 密文状态检查"""
+    """采用成功项目的核心循环逻辑：物理点击 + 通过检测 <span id="BKMH9">成功！</span> 状态来判断成功与否"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
@@ -48,26 +48,33 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    # 最多 3 次循环重试，确保图块或点击交互能够顺利通过并吐出 Token
+    # 最多 3 次循环重试，确保图块或点击交互能够顺利通过
     for cf_attempt in range(3):
         try:
             print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
-            # 核心判断：根据 input 内是否有 Token 密文来判定是否成功打勾
-            cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
-            if cf_token_value and len(cf_token_value.strip()) > 0:
-                print(f"[INFO] ({step_name}) 验证成功！云盾 Token 令牌已顺利生成填充。")
+            # 核心判断：检查是否存在 <span id="BKMH9">成功！</span> 元素来判定是否成功打勾
+            success_elem_present = False
+            try:
+                success_elem = sb.find_element('#BKMH9', timeout=2)
+                if success_elem and "成功！" in success_elem.text:
+                    success_elem_present = True
+            except Exception:
+                pass
+
+            if success_elem_present:
+                print(f"[INFO] ({step_name}) 验证成功！检测到成功标志。")
                 return True
             else:
-                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: Token 依然为空，准备重试...")
+                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: 未检测到成功标志，准备重试...")
         except Exception as e:
             print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
         time.sleep(3)
         
-    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到 Token 填充，尝试继续执行后续动作...")
+    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到成功标志，尝试继续执行后续动作...")
     return True
 
 def accept_cookies_if_present(sb):
