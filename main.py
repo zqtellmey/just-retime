@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import pyautogui
 from seleniumbase import SB
 
 # ==================== 配置项（从 GitHub Secrets 环境变量读取） ====================
@@ -34,22 +35,50 @@ def send_telegram_message(message, image_path=None):
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
-def handle_cloudflare_turnstile(sb, step_name):
-    """固定执行 3 次物理点击，每次间隔 2 秒，不判断成败直接执行后续动作"""
-    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 穿透（固定尝试 3 次，间隔 2 秒）...")
+def handle_cloudflare_in_popup(sb, step_name):
+    """专门在弹出的 DIV 内部定位并执行 3 次 Turnstile 验证穿透"""
+    print(f"[INFO] ({step_name}) 开始寻找弹窗 DIV (#turnstile-timer-reset) 内部的人机验证...")
 
-    for cf_attempt in range(3):
-        try:
-            print(f"[INFO] ({step_name}) 尝试物理 GUI 点击验证 (第 {cf_attempt + 1}/3 次)...")
-            sb.uc_gui_click_captcha()
-        except Exception as e:
-            print(f"[WARN] ({step_name}) 第 {cf_attempt + 1} 次点击异常: {e}")
-        
-        print(f"[INFO] ({step_name}) 等待 2 秒...")
-        time.sleep(2)
-        
-    print(f"[INFO] ({step_name}) 3 次固定点击完成，继续执行后续动作。")
-    return True
+    # 1. 尝试直接调用 SB 内置穿透函数
+    try:
+        sb.uc_gui_click_captcha()
+        time.sleep(1)
+    except Exception:
+        pass
+
+    # 2. 从 DOM 中精确获取弹出 DIV 的视口坐标，直接定位 DIV 内部的人机勾选框
+    try:
+        rect = sb.execute_script("""
+            const el = document.getElementById('turnstile-timer-reset');
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return {
+                left: r.left,
+                top: r.top,
+                width: r.width,
+                height: r.height
+            };
+        """)
+
+        if rect:
+            # 算出 DIV 内部 CF 人机勾选框的准确坐标
+            target_x = int(rect['left'] + 35)
+            target_y = int(rect['top'] + (rect['height'] / 2))
+            
+            print(f"[INFO] ({step_name}) 成功定位弹窗 DIV！内部 CF 验证框坐标: ({target_x}, {target_y})")
+
+            # 在弹窗 DIV 内部的目标点执行 3 次点击，每次间隔 2 秒
+            for i in range(3):
+                print(f"[INFO] ({step_name}) 正在对弹窗 DIV 内部人机框执行第 {i+1}/3 次点击...")
+                pyautogui.click(target_x, target_y)
+                time.sleep(2)
+        else:
+            print(f"[WARN] ({step_name}) 页面中未找到 #turnstile-timer-reset 弹窗 DIV 节点。")
+
+    except Exception as e:
+        print(f"[ERROR] ({step_name}) 弹窗 DIV 内部人机穿透异常: {e}")
+
+    print(f"[INFO] ({step_name}) 弹窗 DIV 内部人机验证处理结束。")
 
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
@@ -63,53 +92,15 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
-def draw_red_marker_and_click(sb, x, y):
-    """结合参考代码的标准绝对定位红点绘制，并执行物理坐标点击"""
-    print(f"[INFO] 正在目标位置 ({x}, {y}) 绘制红点并执行点击...")
-    
-    # 采用你提供的标准绝对定位 Marker JS 脚本
-    js_marker = f"""
-    (() => {{
-        const marker = document.createElement('div');
-        marker.style.position = 'fixed';
-        marker.style.left = '{x}px';
-        marker.style.top = '{y}px';
-        marker.style.width = '14px';
-        marker.style.height = '14px';
-        marker.style.backgroundColor = 'red';
-        marker.style.borderRadius = '50%';
-        marker.style.border = '2px solid white';
-        marker.style.boxShadow = '0 0 6px rgba(0,0,0,0.8)';
-        marker.style.zIndex = '999999';
-        marker.style.transform = 'translate(-50%, -50%)';
-        document.body.appendChild(marker);
-    }})();
-    """
-    try:
-        sb.execute_script(js_marker)
-        print("[INFO] 红点标记注入成功。")
-    except Exception as e:
-        print(f"[WARN] 注入红点标记失败: {e}")
-
-    # 执行坐标物理点击
-    try:
-        import pyautogui
-        pyautogui.click(x, y)
-        print(f"[INFO] 已在物理坐标 ({x}, {y}) 完成点击。")
-    except Exception as e:
-        print(f"[ERROR] 物理点击异常: {e}")
-
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
         return
 
-    # 使用 SeleniumBase uc 模式启动浏览器，强制设置视口确保坐标映射统一
     with SB(uc=True, test=True, locale="zh") as sb:
         screenshot_path = "step_screenshot.png"
         
         try:
-            # 锁定 1920x1080 尺寸以精准匹配 (1080, 725) 坐标
             sb.set_window_size(1920, 1080)
 
             # ==================== 第一步：登录 ====================
@@ -129,10 +120,12 @@ def main():
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
             time.sleep(2)
             
-            handle_cloudflare_turnstile(sb, "登录页")
-            # 增加 5 秒缓冲等待，确保人机验证服务器响应完成并打勾
-            print("[INFO] 等待 5 秒确保登录页 Turnstile 验证生效打勾...")
-            time.sleep(5)
+            # 登录页面的 CF 穿透
+            try:
+                sb.uc_gui_click_captcha()
+            except:
+                pass
+            time.sleep(3)
 
             print("[INFO] 正在点击登录按钮...")
             sb.click('button[type="submit"]')
@@ -149,19 +142,35 @@ def main():
             print("[INFO] 正在点击 Reset timer...")
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=15)
             sb.click('button[aria-label="Reset timer"]')
-            time.sleep(3)
-
-            handle_cloudflare_turnstile(sb, "Reset弹窗")
-            # 关键：在此处增加 5 秒等待，保证弹窗中的人机验证能够完全变为绿勾
-            print("[INFO] 等待 5 秒确保 Reset 弹窗 Turnstile 验证生效打勾...")
-            time.sleep(5)
-
-            # ==================== 使用坐标点击 Just Reset 按钮（带红点） ====================
-            TARGET_X = 1080
-            TARGET_Y = 725
             
-            draw_red_marker_and_click(sb, TARGET_X, TARGET_Y)
-            time.sleep(3)
+            # 等待 Reset 弹窗完全渲染
+            print("[INFO] 等待 Reset 弹窗 DIV 渲染...")
+            time.sleep(4)
+
+            # 1. 在弹出的 DIV 内部处理 CF 人机验证
+            handle_cloudflare_in_popup(sb, "Reset弹窗DIV")
+
+            # 留出时间等待人机打勾及解锁按钮
+            time.sleep(4)
+
+            # 2. 直接使用 DOM 查找并点击弹窗内的 Just Reset 按钮
+            just_reset_xpath = '//button[contains(normalize-space(.), "Just Reset")]'
+            
+            print("[INFO] 正在寻找弹窗 DIV 内部的 Just Reset 按钮...")
+            try:
+                sb.wait_for_element(just_reset_xpath, timeout=10)
+                print("[INFO] 成功在 DOM 中定位到 Just Reset 按钮，执行点击！")
+                sb.click(just_reset_xpath)
+            except Exception as e:
+                print(f"[WARN] DOM 定位 Just Reset 按钮失败，尝试 JS 强行触发点击: {e}")
+                # 备用机制：如果标准 Selenium 点击有弹窗遮罩阻挡，直接执行 JS 点击
+                sb.execute_script("""
+                    const btns = Array.from(document.querySelectorAll('button'));
+                    const targetBtn = btns.find(b => b.textContent.includes('Just Reset'));
+                    if (targetBtn) targetBtn.click();
+                """)
+
+            time.sleep(5)
 
             # 读取 reset 后的剩余时间
             try:
@@ -184,7 +193,7 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 截取带有页面红点的最终图像发送 Telegram
+            # 截图并发送 Telegram
             sb.save_screenshot(screenshot_path)
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
