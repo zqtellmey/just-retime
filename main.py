@@ -50,6 +50,19 @@ def handle_cloudflare_turnstile(sb, step_name):
         print(f"[WARN] ({step_name}) 处理验证码异常: {e}")
         return False
 
+def accept_cookies_if_present(sb):
+    """检测并点击 Cookie 询问框的 Accept All 按钮"""
+    try:
+        print("[INFO] 检查是否存在 Cookie 询问框...")
+        # 使用鲁棒性强的 XPath 通过文本 "Accept All" 进行定位点击
+        accept_btn = sb.find_element('xpath://button[contains(normalize-space(text()), "Accept All")]', timeout=3)
+        if accept_btn:
+            print("[INFO] 发现 Cookie 询问框，正在点击 'Accept All'...")
+            sb.click('xpath://button[contains(normalize-space(text()), "Accept All")]')
+            time.sleep(1)
+    except Exception:
+        print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
+
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
@@ -64,6 +77,9 @@ def main():
             print("[INFO] 正在打开登录页面...")
             sb.open(LOGIN_URL)
             time.sleep(3)
+
+            # 处理可能挡住视线的 Cookie 询问框
+            accept_cookies_if_present(sb)
 
             # 填写账号密码
             sb.type('input[name="Email"]', USER_EMAIL)
