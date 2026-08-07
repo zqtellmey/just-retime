@@ -35,11 +35,12 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """恢复与登录时完全一致的、经过验证的稳健 Turnstile 循环检测机制"""
+    """采用成功项目的核心循环逻辑：物理点击 + Token 密文状态检查"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
         time.sleep(2)
+        # 1:1 对齐成功项目的探测机制：检查是否存在验证框
         result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
             print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
@@ -54,6 +55,7 @@ def handle_cloudflare_turnstile(sb, step_name):
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
+            # 核心判断：根据 input 内是否有 Token 密文来判定是否成功打勾
             cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
             if cf_token_value and len(cf_token_value.strip()) > 0:
                 print(f"[INFO] ({step_name}) 验证成功！云盾 Token 令牌已顺利生成填充。")
@@ -105,7 +107,7 @@ def debug_check_elements(sb):
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
-        print("[ERROR] 缺少必要的环境变量，请检查配置。")
+        print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
         return
 
     # 使用 SeleniumBase uc 模式启动浏览器
@@ -118,26 +120,37 @@ def main():
             sb.open(LOGIN_URL)
             time.sleep(4)
 
+            # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
+
+            # 运行元素预检
             debug_check_elements(sb)
 
+            # 填写邮箱
             print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=15)
             sb.type('input[name="Email"]', USER_EMAIL)
+            
+            print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
+            # 填写密码
             print("[INFO] 正在输入密码...")
             sb.wait_for_element('//*[@id="password"]', timeout=15)
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
+            
+            print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 登录页验证
+            # 处理登录页面的 CF 验证（应用新版循环校验机制）
             handle_cloudflare_turnstile(sb, "登录页")
 
+            # 点击 Sign In 按钮
             print("[INFO] 正在点击登录按钮...")
             sb.click('button[type="submit"]')
             time.sleep(4)
 
+            # 截图并发送 Telegram
             sb.save_screenshot(screenshot_path)
             send_telegram_message("【步骤 1/2】账号登录成功，已过验证并提交表单。", screenshot_path)
 
@@ -146,7 +159,7 @@ def main():
             sb.open(TARGET_URL)
             time.sleep(5)
 
-            # 【恢复】后台页同样使用稳健的统一验证逻辑，确保 100% 打上勾
+            # 处理后台页面的 CF 验证（应用新版循环校验机制）
             handle_cloudflare_turnstile(sb, "后台页")
 
             # 点击 Reset timer 按钮
@@ -155,26 +168,12 @@ def main():
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(2)
 
-            print("[INFO] 已调出 Reset 弹窗，准备点击 Just Reset 按钮...")
+            # 处理可能再次出现的验证
+            handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 点击 Just Reset 按钮（安全精准点击） ====================
-            just_reset_selector = 'button:has(i.bi-arrow-clockwise)'
-            sb.wait_for_element(just_reset_selector, timeout=15)
-            
-            print("[INFO] 正在通过标准元素定位进行 Just Reset 点击...")
-            try:
-                # 先尝试直接用 seleniumbase 自带的安全点击
-                sb.click(just_reset_selector)
-                print("[INFO] Just Reset 按钮点击成功！")
-            except Exception as e:
-                print(f"[WARN] 常规点击异常，尝试通过获取坐标偏移点击: {e}")
-                # 降级方案：利用找到的元素位置进行安全点击
-                btn_elem = sb.find_element(just_reset_selector)
-                sb.driver.execute_script("arguments[0].scrollIntoView(true);", btn_elem)
-                time.sleep(1)
-                btn_elem.click()
-                print("[INFO] 降级点击执行完毕！")
-            
+            # 点击 Just Reset 按钮
+            print("[INFO] 正在点击 Just Reset...")
+            sb.click('button:has(i.bi-arrow-clockwise)')
             time.sleep(3)
 
             # 读取 reset 后的剩余时间
