@@ -63,59 +63,44 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
-def test_draw_center_red_dot(sb):
-    """动态获取窗口尺寸并在正中心画一个强力高亮红点（固定在屏幕中央）"""
-    js_code = """
-    (() => {
-        // 1. 获取当前浏览器视口中心坐标
-        const centerX = window.innerWidth / 2;
-        const centerY = window.innerHeight / 2;
-        
-        // 2. 创建固定定位的红点，确保不受页面滚动影响
+def draw_red_dot(sb, x, y):
+    """仅在指定坐标位置绘制高亮红点（不点击）"""
+    js_code = f"""
+    (() => {{
         const marker = document.createElement('div');
-        marker.id = 'center-test-marker';
+        marker.id = 'target-test-marker';
         marker.style.position = 'fixed';
-        marker.style.left = centerX + 'px';
-        marker.style.top = centerY + 'px';
-        marker.style.width = '30px';
-        marker.style.height = '30px';
+        marker.style.left = '{x}px';
+        marker.style.top = '{y}px';
+        marker.style.width = '24px';
+        marker.style.height = '24px';
         marker.style.backgroundColor = 'red';
         marker.style.borderRadius = '50%';
         marker.style.border = '3px solid yellow';
         marker.style.boxShadow = '0 0 15px red, 0 0 5px black';
-        marker.style.zIndex = '2147483647'; // 设为 32 位整型最大值，盖过所有 Modal 弹窗
+        marker.style.zIndex = '2147483647'; // 设为最大值，确保覆盖弹窗
         marker.style.transform = 'translate(-50%, -50%)';
-        marker.style.pointerEvents = 'none'; // 避免挡住真实点击
+        marker.style.pointerEvents = 'none'; // 避免干扰
         
         document.body.appendChild(marker);
-        
-        return {
-            innerWidth: window.innerWidth,
-            innerHeight: window.innerHeight,
-            centerX: centerX,
-            centerY: centerY
-        };
-    })();
+    }})();
     """
     try:
-        res = sb.execute_script(js_code)
-        print(f"[INFO] 视口分辨率: {res['innerWidth']}x{res['innerHeight']}，红点已成功绘制在正中心: ({res['centerX']}, {res['centerY']})")
-        return res['centerX'], res['centerY']
+        sb.execute_script(js_code)
+        print(f"[INFO] 已在坐标 ({x}, {y}) 位置绘制红点（仅标注，未点击）。")
     except Exception as e:
-        print(f"[ERROR] 正中心红点绘制失败: {e}")
-        return None, None
+        print(f"[ERROR] 绘制红点失败: {e}")
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
         return
 
-    # 使用 SeleniumBase uc 模式启动浏览器，显式锁定 1920x1080 窗口以防尺寸异常
+    # 使用 SeleniumBase uc 模式启动浏览器，锁定 1920x1080 窗口
     with SB(uc=True, test=True, locale="zh") as sb:
         screenshot_path = "step_screenshot.png"
         
         try:
-            # 强制设定浏览器窗口尺寸，便于稳定观察
             sb.set_window_size(1920, 1080)
             
             # ==================== 第一步：登录 ====================
@@ -156,51 +141,22 @@ def main():
 
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 测试：在屏幕正中间绘制红点 ====================
-            print("[INFO] 准备在屏幕正中心测试绘制红点...")
-            center_x, center_y = test_draw_center_red_dot(sb)
+            # ==================== 坐标标注测试 (Just Reset 按钮) ====================
+            # 根据 1920x1080 图像计算出的 Just Reset 按钮中心位置
+            TARGET_X = 1080
+            TARGET_Y = 725
             
-            if center_x and center_y:
-                # 尝试用物理鼠标点击中心点，验证坐标系统
-                try:
-                    import pyautogui
-                    pyautogui.click(center_x, center_y)
-                    print(f"[INFO] 已尝试点击中心红点坐标 ({center_x}, {center_y})。")
-                except Exception as e:
-                    print(f"[WARN] 物理点击中心红点异常: {e}")
-
+            print(f"[INFO] 正在尝试将红点对准 Just Reset 按钮 -> X: {TARGET_X}, Y: {TARGET_Y}")
+            draw_red_dot(sb, TARGET_X, TARGET_Y)
+            
+            # 暂不执行物理点击，留出时间观察
             time.sleep(3)
 
-            # 读取 reset 后的剩余时间
-            try:
-                remaining_time_elem = sb.find_element('span.hidden.sm\\:inline')
-                remaining_time_text = remaining_time_elem.text
-                print(f"[INFO] 当前剩余时间: {remaining_time_text}")
-            except Exception:
-                remaining_time_text = "未能成功获取剩余时间"
-                print(f"[WARN] {remaining_time_text}")
-
-            # 检查 Start 按钮是否存在，存在则点击
-            start_clicked = False
-            try:
-                start_btn = sb.find_element('xpath://button[contains(normalize-space(text()), "Start")]')
-                if start_btn:
-                    print("[INFO] 发现 Start 按钮，正在点击...")
-                    sb.click('xpath://button[contains(normalize-space(text()), "Start")]')
-                    start_clicked = True
-                    time.sleep(3)
-            except Exception:
-                print("[INFO] 未发现 Start 按钮或当前无需点击。")
-
-            # 截取带有屏幕正中央红点的截图发往 Telegram
+            # 截取带红点的图像发送 Telegram 校准
             sb.save_screenshot(screenshot_path)
-            msg = (
-                f"【测试步骤】正中心红点测试完成！\n"
-                f"⏱️ 剩余时间: {remaining_time_text}\n"
-                f"▶️ Start按钮已点击: {'是' if start_clicked else '否'}"
-            )
+            msg = f"【坐标校准测试】红点已移动到坐标 ({TARGET_X}, {TARGET_Y})，请查看截图确认位置是否准确。"
             send_telegram_message(msg, screenshot_path)
-            print("[INFO] 所有步骤执行完毕！")
+            print("[INFO] 截图发送完毕，待确认红点位置。")
 
         except Exception as e:
             error_msg = f"[ERROR] 任务执行过程中发生异常: {str(e)}"
