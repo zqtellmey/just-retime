@@ -166,53 +166,36 @@ def main():
             print("[INFO] 正在点击 Reset timer...")
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=15)
             sb.click('button[aria-label="Reset timer"]')
-            time.sleep(2)
+            time.sleep(3)
 
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
             # ==================== 查找并打印 Just Reset 按钮的完整 HTML ====================
-            print("[INFO] 正在查找 Just Reset 按钮并输出其完整元素内容...")
+            print("[INFO] 正在等待并查找 Just Reset 按钮...")
             
-            just_reset_selectors = [
-                'xpath://button[contains(normalize-space(.), "Just Reset")]',
-                'xpath://button[.//i[contains(@class, "bi-arrow-clockwise")] and contains(normalize-space(.), "Just Reset")]',
-                'button:has(> i.bi-arrow-clockwise)'
-            ]
+            # 采用带显式等待的高鲁棒性 XPath，确保弹窗渲染完成后能正确抓取
+            just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
             
-            used_selector = None
-            for sel in just_reset_selectors:
-                try:
-                    print(f"[DEBUG] 尝试使用选择器查找: {sel}")
-                    if sb.is_element_visible(sel, timeout=3):
-                        print(f"[INFO]  [√] 成功找到按钮，匹配选择器: {sel}")
-                        used_selector = sel
-                        break
-                except Exception:
-                    print(f"[INFO]  [×] 未找到: {sel}")
-            
-            if used_selector:
-                # 直接通过纯 JS 获取并打印匹配到的第一个元素的 outerHTML，彻底避免类型序列化报错
-                outer_html = sb.driver.execute_script("""
-                    let sel = arguments[0];
-                    let el = document.querySelector(sel);
-                    if (!el && sel.startsWith('xpath:')) {
-                        let xpath = sel.substring(6);
-                        let res = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                        el = res.singleNodeValue;
-                    }
-                    return el ? el.outerHTML : "Element not found via JS";
-                """, used_selector)
+            try:
+                # 显式等待按钮出现并可见
+                sb.wait_for_element(just_reset_selector, timeout=10)
+                found_element = sb.find_element(just_reset_selector)
+                
+                if found_element:
+                    # 打印获取到的真实元素的 outerHTML，用来核对是不是你要的 Just Reset 按钮
+                    outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
+                    print("=" * 60)
+                    print("[DEBUG] 成功捕获到 Just Reset 按钮的真实 HTML 内容如下：")
+                    print(outer_html)
+                    print("=" * 60)
 
-                print("=" * 60)
-                print("[DEBUG] 捕获到的 Just Reset 按钮真实 HTML 内容如下：")
-                print(outer_html)
-                print("=" * 60)
-
-                print("[INFO] 正在点击 Just Reset 按钮...")
-                sb.click(used_selector)
-            else:
-                print("[ERROR] 所有选择器均未找到 Just Reset 按钮！")
+                    print("[INFO] 正在点击 Just Reset 按钮...")
+                    sb.click(just_reset_selector)
+                else:
+                    raise Exception("未找到元素对象")
+            except Exception as e:
+                print(f"[ERROR] 没能找到 Just Reset 按钮，异常原因: {e}")
                 raise Exception("未找到 Just Reset 按钮元素")
 
             time.sleep(3)
