@@ -35,7 +35,7 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """采用精简稳定的点击与放行逻辑"""
+    """通过检测隐藏的 cf-turnstile-response 是否有 Token 来精准判断人机验证是否成功"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
     
     try:
@@ -47,18 +47,27 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    for cf_attempt in range(2):
+    # 最多循环 3 次，通过物理点击并检测 Token 是否生成
+    for cf_attempt in range(3):
         try:
             print(f"[INFO] ({step_name}) 尝试物理 GUI 点击验证 (第 {cf_attempt + 1} 次)...")
             sb.uc_gui_click_captcha()
-            time.sleep(6)
-            print(f"[INFO] ({step_name}) 验证点击动作已完成，继续向下执行。")
-            return True
+            
+            # 循环检查 Token 是否吐出（最多等待 6 秒）
+            for _ in range(6):
+                time.sleep(1)
+                token_val = sb.driver.execute_script('let el = document.querySelector("input[name=\'cf-turnstile-response\']"); return el ? el.value : "";')
+                if token_val and len(token_val.strip()) > 10:
+                    print(f"[INFO] ({step_name}) 验证成功！捕获到有效的 Cloudflare Token。")
+                    return True
+            
+            print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: Token 尚未生成，准备重试...")
         except Exception as e:
             print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
         
         time.sleep(2)
         
+    print(f"[WARN] ({step_name}) 经过多次重试未明确捕捉到 Token，强制继续执行后续动作...")
     return True
 
 def accept_cookies_if_present(sb):
@@ -74,7 +83,7 @@ def accept_cookies_if_present(sb):
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
 def debug_check_elements(sb):
-    """预先查找页面上的关键元素并输出结果，集成 iframe 内的 CF 复选框/Token 元素排查"""
+    """预先查找页面上的关键元素并输出结果，确保基础环境正常"""
     print("=" * 40)
     print("[DEBUG] 开始检查页面元素定位状态：")
     
@@ -94,29 +103,7 @@ def debug_check_elements(sb):
                 print(f"  [√] {name} -> 查找成功")
         except Exception:
             print(f"  [×] {name} -> 未找到")
-
-    # 针对 iframe 内部的 CF 元素进行独立检查
-    try:
-        cf_in_frame = sb.driver.execute_script('''
-            let responseInput = document.querySelector('input[name="cf-turnstile-response"]');
-            if (responseInput) return true;
-            let frames = document.querySelectorAll('iframe');
-            for (let frame of frames) {
-                try {
-                    let frameDoc = frame.contentDocument || frame.contentWindow.document;
-                    let checkbox = frameDoc.querySelector('input[type="checkbox"]');
-                    if (checkbox) return true;
-                } catch (e) {}
-            }
-            return false;
-        ''')
-        if cf_in_frame:
-            print("  [√] iframe 内部人机验证元素 (checkbox / 响应框) -> 查找成功")
-        else:
-            print("  [×] iframe 内部人机验证元素 (checkbox / 响应框) -> 未找到")
-    except Exception:
-        print("  [×] iframe 内部人机验证元素 (checkbox / 响应框) -> 未找到")
-
+            
     print("=" * 40)
 
 def main():
@@ -188,16 +175,13 @@ def main():
             # ==================== 查找并打印 Just Reset 按钮的完整 HTML ====================
             print("[INFO] 正在等待并查找 Just Reset 按钮...")
             
-            # 采用带显式等待的高鲁棒性 XPath，确保弹窗渲染完成后能正确抓取
             just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
             
             try:
-                # 显式等待按钮出现并可见
                 sb.wait_for_element(just_reset_selector, timeout=10)
                 found_element = sb.find_element(just_reset_selector)
                 
                 if found_element:
-                    # 打印获取到的真实元素的 outerHTML，用来核对是不是你要的 Just Reset 按钮
                     outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
                     print("=" * 60)
                     print("[DEBUG] 成功捕获到 Just Reset 按钮的真实 HTML 内容如下：")
