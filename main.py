@@ -180,33 +180,37 @@ def main():
                 'button:has(i.bi-arrow-clockwise)'
             ]
             
-            found_element = None
             used_selector = None
             for sel in just_reset_selectors:
                 try:
                     print(f"[DEBUG] 尝试使用选择器查找: {sel}")
-                    elem = sb.find_element(sel, timeout=3)
-                    if elem:
+                    if sb.is_element_visible(sel, timeout=3):
                         print(f"[INFO]  [√] 成功找到按钮，匹配选择器: {sel}")
-                        found_element = elem
                         used_selector = sel
                         break
                 except Exception:
                     print(f"[INFO]  [×] 未找到: {sel}")
             
-            if found_element:
-                # 打印获取到的真实元素的 outerHTML，用来核对是不是你要的 Just Reset 按钮
-                outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
+            if used_selector:
+                # 直接通过纯 JS 获取并打印匹配到的第一个元素的 outerHTML，彻底避免类型序列化报错
+                outer_html = sb.driver.execute_script("""
+                    let sel = arguments[0];
+                    let el = document.querySelector(sel);
+                    if (!el && sel.startsWith('xpath:')) {
+                        let xpath = sel.substring(6);
+                        let res = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                        el = res.singleNodeValue;
+                    }
+                    return el ? el.outerHTML : "Element not found via JS";
+                """, used_selector)
+
                 print("=" * 60)
                 print("[DEBUG] 捕获到的 Just Reset 按钮真实 HTML 内容如下：")
                 print(outer_html)
                 print("=" * 60)
 
                 print("[INFO] 正在点击 Just Reset 按钮...")
-                try:
-                    sb.click(used_selector)
-                except Exception:
-                    sb.driver.execute_script("arguments[0].click();", found_element)
+                sb.click(used_selector)
             else:
                 print("[ERROR] 所有选择器均未找到 Just Reset 按钮！")
                 raise Exception("未找到 Just Reset 按钮元素")
