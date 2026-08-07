@@ -37,7 +37,7 @@ def send_telegram_message(message, image_path=None):
 
 def handle_cloudflare_turnstile(sb, step_name=""):
     """
-    100% 参照 FalixNodes 项目的过 CF 人机验证逻辑
+    参照 FalixNodes 项目的过 CF 人机验证逻辑
     全盘 try...except 保护，物理点击失败也不会导致主程序崩溃
     """
     prefix = f"({step_name}) " if step_name else ""
@@ -87,7 +87,7 @@ def main():
 
     try:
         with SB(**opts) as sb:
-            # 加上页面加载超时防护，防止打开 LOGIN_URL 时页面假死卡崩驱动
+            # 加上页面加载超时防护，防止页面假死卡崩驱动
             sb.driver.set_page_load_timeout(45)
             sb.driver.set_window_size(1920, 1080)
             
@@ -113,7 +113,7 @@ def main():
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
             time.sleep(2)
 
-            # 尝试最多 3 次过 CF 验证
+            # 登录页 CF 人机验证检测与处理
             print("[INFO] 启动登录页 Cloudflare 人机验证检测...")
             for cf_attempt in range(3):
                 handle_cloudflare_turnstile(sb, f"登录页第 {cf_attempt + 1} 次")
@@ -135,31 +135,28 @@ def main():
 
             # 截图并发送 Telegram
             sb.save_screenshot(screenshot_path)
-            send_telegram_message("【步骤 1/2】账号登录表单已提交。", screenshot_path)
+            send_telegram_message("📸 【步骤 1/2】账号登录表单已提交。", screenshot_path)
 
             # ==================== 第二步：进入后台并重置 ====================
             print(f"[INFO] 正在跳转到目标页面: {TARGET_URL}")
             sb.driver.get(TARGET_URL)
             time.sleep(5)
 
-            # 处理后台页面的 CF 验证
-            for cf_attempt in range(3):
-                handle_cloudflare_turnstile(sb, f"后台页第 {cf_attempt + 1} 次")
-                try:
-                    cf_token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
-                    if cf_token and len(cf_token.strip()) > 0:
-                        break
-                except Exception:
-                    pass
-                time.sleep(3)
+            # 📸 1. 跳转到后台页面后立即截图发送 Telegram
+            sb.save_screenshot(screenshot_path)
+            send_telegram_message("📸 【步骤 2/2】已跳转至目标后台页面现场。", screenshot_path)
 
             # 点击 Reset timer 按钮
             print("[INFO] 正在点击 Reset timer...")
-            sb.wait_for_element('button[aria-label="Reset timer"]', timeout=15)
+            sb.wait_for_element('button[aria-label="Reset timer"]', timeout=20)
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(3)
 
-            # 处理 Reset 弹窗可能出现的 CF 验证
+            # 📸 2. 点击 Reset timer 按钮后截图发送 Telegram
+            sb.save_screenshot(screenshot_path)
+            send_telegram_message("📸 【步骤 2/2】已点击 Reset timer 按钮，弹窗界面现场。", screenshot_path)
+
+            # 点击 Reset timer 之后触发 CF 人机验证处理
             handle_cloudflare_turnstile(sb, "Reset 弹窗")
 
             # 查找并点击 Just Reset 按钮
@@ -167,7 +164,7 @@ def main():
             just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
             
             try:
-                sb.wait_for_element(just_reset_selector, timeout=10)
+                sb.wait_for_element(just_reset_selector, timeout=20)
                 found_element = sb.find_element(just_reset_selector)
                 
                 if found_element:
@@ -182,8 +179,10 @@ def main():
                 else:
                     raise Exception("未找到元素对象")
             except Exception as e:
-                print(f"[ERROR] 没能找到 Just Reset 按钮，异常原因: {e}")
-                raise Exception("未找到 Just Reset 按钮元素")
+                # 📸 3. 查找按钮超时失败时截图推送 Telegram
+                sb.save_screenshot(screenshot_path)
+                send_telegram_message(f"⚠️ 【异常现场】查找 Just Reset 按钮失败！报错: {e}", screenshot_path)
+                raise Exception(f"未找到 Just Reset 按钮元素: {e}")
 
             time.sleep(3)
 
@@ -211,7 +210,7 @@ def main():
             # 最终截图并发送 Telegram 通知
             sb.save_screenshot(screenshot_path)
             msg = (
-                f"【步骤 2/2】操作执行完成！\n"
+                f"🎉 【步骤 2/2】操作执行完成！\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
                 f"▶️ Start 按钮已点击: {'是' if start_clicked else '否'}"
             )
@@ -219,7 +218,7 @@ def main():
             print("[INFO] 所有步骤顺利执行完毕！")
 
     except Exception as e:
-        error_msg = f"[ERROR] 任务执行过程中发生异常: {str(e)}"
+        error_msg = f"🚨 [ERROR] 任务执行过程中发生异常: {str(e)}"
         print(error_msg)
         screenshot_path = "step_screenshot.png"
         try:
