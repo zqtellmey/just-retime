@@ -1,7 +1,6 @@
 import os
 import time
 import requests
-import pyautogui
 from seleniumbase import SB
 
 # ==================== 配置项（从 GitHub Secrets 环境变量读取） ====================
@@ -36,49 +35,18 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_in_popup(sb, step_name):
-    """专门在弹出的 DIV 内部定位并执行 3 次 Turnstile 验证穿透"""
-    print(f"[INFO] ({step_name}) 开始寻找弹窗 DIV (#turnstile-timer-reset) 内部的人机验证...")
+    """在弹窗内部执行 Turnstile 验证穿透（尝试 3 次）"""
+    print(f"[INFO] ({step_name}) 开始处理人机验证...")
 
-    # 1. 尝试直接调用 SB 内置穿透函数
-    try:
-        sb.uc_gui_click_captcha()
-        time.sleep(1)
-    except Exception:
-        pass
+    for i in range(3):
+        try:
+            print(f"[INFO] ({step_name}) 尝试第 {i+1}/3 次人机验证穿透...")
+            sb.uc_gui_click_captcha()
+        except Exception as e:
+            print(f"[WARN] ({step_name}) 第 {i+1} 次验证穿透跳过或未找到: {e}")
+        time.sleep(2)
 
-    # 2. 从 DOM 中精确获取弹出 DIV 的视口坐标，直接定位 DIV 内部的人机勾选框
-    try:
-        rect = sb.execute_script("""
-            const el = document.getElementById('turnstile-timer-reset');
-            if (!el) return null;
-            const r = el.getBoundingClientRect();
-            return {
-                left: r.left,
-                top: r.top,
-                width: r.width,
-                height: r.height
-            };
-        """)
-
-        if rect:
-            # 算出 DIV 内部 CF 人机勾选框的准确坐标
-            target_x = int(rect['left'] + 35)
-            target_y = int(rect['top'] + (rect['height'] / 2))
-            
-            print(f"[INFO] ({step_name}) 成功定位弹窗 DIV！内部 CF 验证框坐标: ({target_x}, {target_y})")
-
-            # 在弹窗 DIV 内部的目标点执行 3 次点击，每次间隔 2 秒
-            for i in range(3):
-                print(f"[INFO] ({step_name}) 正在对弹窗 DIV 内部人机框执行第 {i+1}/3 次点击...")
-                pyautogui.click(target_x, target_y)
-                time.sleep(2)
-        else:
-            print(f"[WARN] ({step_name}) 页面中未找到 #turnstile-timer-reset 弹窗 DIV 节点。")
-
-    except Exception as e:
-        print(f"[ERROR] ({step_name}) 弹窗 DIV 内部人机穿透异常: {e}")
-
-    print(f"[INFO] ({step_name}) 弹窗 DIV 内部人机验证处理结束。")
+    print(f"[INFO] ({step_name}) 人机验证处理流程完成。")
 
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
@@ -91,6 +59,58 @@ def accept_cookies_if_present(sb):
             time.sleep(2)
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
+
+def click_just_reset_button(sb):
+    """验证并尝试点击 Just Reset 按钮"""
+    print("[INFO] [诊断模式] 开始全面检测页面中是否存在 'Just Reset' 按钮...")
+
+    # 1. 先用 JS 在页面全局深度搜寻该按钮节点
+    found_info = sb.execute_script("""
+        const btns = Array.from(document.querySelectorAll('button'));
+        const target = btns.find(b => b.textContent.includes('Just Reset'));
+        if (target) {
+            return {
+                found: true,
+                tagName: target.tagName,
+                className: target.className,
+                isVisible: target.offsetWidth > 0 && target.offsetHeight > 0,
+                text: target.textContent.trim()
+            };
+        }
+        return { found: false };
+    """)
+
+    print(f"[INFO] [诊断结果] JS 查询结果: {found_info}")
+
+    # 2. 尝试用 Selenium 标准 XPath 定位并点击
+    just_reset_xpath = '//button[contains(normalize-space(.), "Just Reset")]'
+    try:
+        print("[INFO] 尝试使用 Selenium Standard XPath 定位点击...")
+        sb.wait_for_element(just_reset_xpath, timeout=8)
+        sb.click(just_reset_xpath)
+        print("[SUCCESS] 成功通过 Selenium 定位并点击了 Just Reset 按钮！")
+        return True
+    except Exception as e:
+        print(f"[WARN] Selenium 标准点击失败: {e}")
+
+    # 3. 如果 Selenium 点击失败，但 JS 诊断找到了元素，使用 JS 强制强行点击
+    if found_info and found_info.get("found"):
+        print("[INFO] 尝试通过 JavaScript 脚本直接触发强行点击 (.click())...")
+        clicked = sb.execute_script("""
+            const btns = Array.from(document.querySelectorAll('button'));
+            const target = btns.find(b => b.textContent.includes('Just Reset'));
+            if (target) {
+                target.click();
+                return true;
+            }
+            return false;
+        """)
+        if clicked:
+            print("[SUCCESS] 成功通过 JS 强制点击了 Just Reset 按钮！")
+            return True
+
+    print("[ERROR] 未能找到或点击 Just Reset 按钮！")
+    return False
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
@@ -121,10 +141,7 @@ def main():
             time.sleep(2)
             
             # 登录页面的 CF 穿透
-            try:
-                sb.uc_gui_click_captcha()
-            except:
-                pass
+            handle_cloudflare_in_popup(sb, "登录页")
             time.sleep(3)
 
             print("[INFO] 正在点击登录按钮...")
@@ -147,28 +164,14 @@ def main():
             print("[INFO] 等待 Reset 弹窗 DIV 渲染...")
             time.sleep(4)
 
-            # 1. 在弹出的 DIV 内部处理 CF 人机验证
+            # 1. 处理弹窗内的 CF 人机验证
             handle_cloudflare_in_popup(sb, "Reset弹窗DIV")
 
             # 留出时间等待人机打勾及解锁按钮
             time.sleep(4)
 
-            # 2. 直接使用 DOM 查找并点击弹窗内的 Just Reset 按钮
-            just_reset_xpath = '//button[contains(normalize-space(.), "Just Reset")]'
-            
-            print("[INFO] 正在寻找弹窗 DIV 内部的 Just Reset 按钮...")
-            try:
-                sb.wait_for_element(just_reset_xpath, timeout=10)
-                print("[INFO] 成功在 DOM 中定位到 Just Reset 按钮，执行点击！")
-                sb.click(just_reset_xpath)
-            except Exception as e:
-                print(f"[WARN] DOM 定位 Just Reset 按钮失败，尝试 JS 强行触发点击: {e}")
-                # 备用机制：如果标准 Selenium 点击有弹窗遮罩阻挡，直接执行 JS 点击
-                sb.execute_script("""
-                    const btns = Array.from(document.querySelectorAll('button'));
-                    const targetBtn = btns.find(b => b.textContent.includes('Just Reset'));
-                    if (targetBtn) targetBtn.click();
-                """)
+            # 2. 执行诊断及点击 Just Reset 按钮
+            reset_success = click_just_reset_button(sb)
 
             time.sleep(5)
 
@@ -191,12 +194,13 @@ def main():
                     start_clicked = True
                     time.sleep(3)
             except Exception:
-                print("[INFO] 未发现 Start 按钮或当前无需点击。")
+                print("[INFO] 未发现 Start 按钮或当前步骤无需点击。")
 
             # 截图并发送 Telegram
             sb.save_screenshot(screenshot_path)
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
+                f"🎯 Just Reset 点击成功: {'是' if reset_success else '否'}\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
                 f"▶️ Start按钮已点击: {'是' if start_clicked else '否'}"
             )
