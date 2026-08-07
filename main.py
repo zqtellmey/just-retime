@@ -34,6 +34,42 @@ def send_telegram_message(message, image_path=None):
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
+def handle_cloudflare_turnstile(sb, step_name):
+    """采用成功项目的核心循环逻辑：物理点击 + Token 密文状态检查"""
+    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 智能检测与穿透...")
+    
+    try:
+        time.sleep(2)
+        # 1:1 对齐成功项目的探测机制：检查是否存在验证框
+        result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
+        if not result:
+            print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
+            return True
+    except Exception:
+        pass
+
+    # 最多 3 次循环重试，确保图块或点击交互能够顺利通过并吐出 Token
+    for cf_attempt in range(3):
+        try:
+            print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
+            sb.uc_gui_click_captcha()
+            time.sleep(5)
+            
+            # 核心判断：根据 input 内是否有 Token 密文来判定是否成功打勾
+            cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
+            if cf_token_value and len(cf_token_value.strip()) > 0:
+                print(f"[INFO] ({step_name}) 验证成功！云盾 Token 令牌已顺利生成填充。")
+                return True
+            else:
+                print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1}: Token 依然为空，准备重试...")
+        except Exception as e:
+            print(f"[WARN] ({step_name}) 尝试 {cf_attempt + 1} 异常: {e}")
+        
+        time.sleep(3)
+        
+    print(f"[WARN] ({step_name}) 经过多次重试仍未明确检测到 Token 填充，尝试继续执行后续动作...")
+    return True
+
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
     try:
@@ -46,176 +82,75 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
-def handle_cloudflare_in_popup_div(sb):
-    """专门针对 Reset 弹窗 DIV 内部的人机验证进行穿透与多次触发"""
-    print("[INFO] (Reset弹窗DIV) 开始深度检测并尝试处理弹窗内部的人机验证...")
-
-    # 先调用一次 SB 内置穿透逻辑
-    try:
-        sb.uc_gui_click_captcha()
-    except Exception:
-        pass
-
-    # 使用语法修正后的 JS (带 IIFE 包装) 定位弹窗容器及内部的 Turnstile iframe
-    for attempt in range(3):
-        print(f"[INFO] (Reset弹窗DIV) 尝试第 {attempt + 1}/3 次深入定位弹窗与 CF 框...")
+def debug_check_elements(sb):
+    """预先查找页面上的关键元素并输出结果，辅助排查"""
+    print("=" * 40)
+    print("[DEBUG] 开始检查页面元素定位状态：")
+    
+    selectors = {
+        "Cookie 按钮 (button.cky-btn-accept)": "button.cky-btn-accept",
+        "邮箱输入框 (input[name='Email'])": "input[name='Email']",
+        "密码输入框 (//*[@id='password'])": "//*[@id='password']",
+        "密码输入框备用 (input[name='Password'])": "input[name='Password']",
+        "提交按钮 (button[type='submit'])": "button[type='submit']"
+    }
+    
+    for name, selector in selectors.items():
         try:
-            cf_info = sb.execute_script("""
-                return (() => {
-                    const popup = document.getElementById('turnstile-timer-reset') || document.querySelector('div[role="dialog"]');
-                    if (!popup) {
-                        return { status: "popup_not_found" };
-                    }
-                    
-                    // 寻找弹窗内的 turnstile 容器或 iframe
-                    const iframe = popup.querySelector('iframe[src*="cloudflare"]') || popup.querySelector('iframe[src*="turnstile"]');
-                    if (iframe) {
-                        const rect = iframe.getBoundingClientRect();
-                        return {
-                            status: "iframe_found",
-                            x: rect.left + rect.width / 2,
-                            y: rect.top + rect.height / 2
-                        };
-                    }
-                    
-                    const rect = popup.getBoundingClientRect();
-                    return {
-                        status: "popup_found_no_iframe",
-                        x: rect.left + 35,
-                        y: rect.top + (rect.height / 2)
-                    };
-                })();
-            """)
-
-            print(f"[INFO] (Reset弹窗DIV) 弹窗及 CF 框探测结果: {cf_info}")
-
-            # 如果找到了具体坐标，使用 CDPTarget/PyAutoGUI 或 JS 模拟点击
-            if cf_info and cf_info.get("status") in ["iframe_found", "popup_found_no_iframe"]:
-                cx = cf_info.get("x")
-                cy = cf_info.get("y")
-                print(f"[INFO] 正在对算出的坐标 ({cx}, {cy}) 派发点击事件...")
-                
-                # 使用 JS 派发原生 Pointer/Click 事件穿透至深层元素
-                sb.execute_script(f"""
-                    (() => {{
-                        const el = document.elementFromPoint({cx}, {cy});
-                        if (el) {{
-                            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evtType => {{
-                                el.dispatchEvent(new MouseEvent(evtType, {{
-                                    bubbles: true,
-                                    cancelable: true,
-                                    clientX: {cx},
-                                    clientY: {cy}
-                                }}));
-                            }});
-                        }}
-                    }})();
-                """)
-
-        except Exception as e:
-            print(f"[WARN] 第 {attempt + 1} 次尝试穿透异常: {e}")
-
-        time.sleep(2)
-
-def click_just_reset_button(sb):
-    """诊断并点击弹窗 DIV 内部的 Just Reset 按钮 (使用 IIFE 修复 JS 语法错误)"""
-    print("[INFO] [诊断模式] 开始检测弹窗 DIV 中是否存在 'Just Reset' 按钮...")
-
-    # 1. 使用完全符合规范的 IIFE IIFE 封装 JS 脚本，防止 Illegal return 错误
-    found_info = sb.execute_script("""
-        return (() => {
-            // 查寻包含 Just Reset 文本的所有按钮
-            const btns = Array.from(document.querySelectorAll('button'));
-            const target = btns.find(b => b.textContent && b.textContent.includes('Just Reset'));
+            elem = sb.find_element(selector, timeout=2)
+            if elem:
+                print(f"  [√] {name} -> 查找成功")
+        except Exception:
+            print(f"  [×] {name} -> 未找到")
             
-            if (target) {
-                return {
-                    found: true,
-                    tagName: target.tagName,
-                    className: target.className,
-                    disabled: target.disabled,
-                    isVisible: target.offsetWidth > 0 && target.offsetHeight > 0,
-                    text: target.textContent.trim()
-                };
-            }
-            return { found: false, totalButtons: btns.length };
-        })();
-    """)
-
-    print(f"[INFO] [诊断结果] 弹窗内部按钮查询结果: {found_info}")
-
-    # 2. 优先尝试 Selenium 标准 XPath 点击
-    just_reset_xpath = '//button[contains(normalize-space(.), "Just Reset")]'
-    try:
-        print("[INFO] 尝试使用 Selenium Standard XPath 定位点击...")
-        sb.wait_for_element(just_reset_xpath, timeout=6)
-        sb.click(just_reset_xpath)
-        print("[SUCCESS] 成功通过 Selenium 定位并点击了 Just Reset 按钮！")
-        return True
-    except Exception as e:
-        print(f"[WARN] Selenium 标准点击未成功: {e}")
-
-    # 3. 如果找到元素但被遮挡或禁用，使用 JS 直接点击
-    if found_info and found_info.get("found"):
-        print("[INFO] 尝试通过 JS 强制触发 `.click()`...")
-        clicked = sb.execute_script("""
-            return (() => {
-                const btns = Array.from(document.querySelectorAll('button'));
-                const target = btns.find(b => b.textContent && b.textContent.includes('Just Reset'));
-                if (target) {
-                    target.disabled = false; // 防范处于禁用状态
-                    target.click();
-                    return true;
-                }
-                return false;
-            })();
-        """)
-        if clicked:
-            print("[SUCCESS] 成功通过 JS 强制点击了 Just Reset 按钮！")
-            return True
-
-    print("[ERROR] 未能成功点击 Just Reset 按钮！")
-    return False
+    print("=" * 40)
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
         return
 
+    # 使用 SeleniumBase uc 模式启动浏览器
     with SB(uc=True, test=True, locale="zh") as sb:
         screenshot_path = "step_screenshot.png"
         
         try:
-            sb.set_window_size(1920, 1080)
-
             # ==================== 第一步：登录 ====================
             print("[INFO] 正在打开登录页面...")
             sb.open(LOGIN_URL)
             time.sleep(4)
 
+            # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
 
+            # 运行元素预检
+            debug_check_elements(sb)
+
+            # 填写邮箱
             print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=15)
             sb.type('input[name="Email"]', USER_EMAIL)
+            
+            print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
+            # 填写密码
             print("[INFO] 正在输入密码...")
             sb.wait_for_element('//*[@id="password"]', timeout=15)
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
+            
+            print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 登录页面的 CF 穿透
-            try:
-                sb.uc_gui_click_captcha()
-            except Exception:
-                pass
-            time.sleep(3)
+            # 处理登录页面的 CF 验证（应用新版循环校验机制）
+            handle_cloudflare_turnstile(sb, "登录页")
 
+            # 点击 Sign In 按钮
             print("[INFO] 正在点击登录按钮...")
             sb.click('button[type="submit"]')
             time.sleep(4)
 
+            # 截图并发送 Telegram
             sb.save_screenshot(screenshot_path)
             send_telegram_message("【步骤 1/2】账号登录成功，已过验证并提交表单。", screenshot_path)
 
@@ -224,24 +159,46 @@ def main():
             sb.open(TARGET_URL)
             time.sleep(5)
 
+            # 处理后台页面的 CF 验证（应用新版循环校验机制）
+            handle_cloudflare_turnstile(sb, "后台页")
+
+            # 点击 Reset timer 按钮
             print("[INFO] 正在点击 Reset timer...")
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=15)
             sb.click('button[aria-label="Reset timer"]')
+            time.sleep(3)
+
+            # 处理可能再次出现的验证
+            handle_cloudflare_turnstile(sb, "Reset弹窗")
+
+            # ==================== 查找并打印 Just Reset 按钮的完整 HTML ====================
+            print("[INFO] 正在等待并查找 Just Reset 按钮...")
             
-            # 等待 Reset 弹窗 DIV 完全渲染
-            print("[INFO] 等待 Reset 弹窗 DIV 渲染...")
-            time.sleep(4)
+            # 采用带显式等待的高鲁棒性 XPath，确保弹窗渲染完成后能正确抓取
+            just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
+            
+            try:
+                # 显式等待按钮出现并可见
+                sb.wait_for_element(just_reset_selector, timeout=10)
+                found_element = sb.find_element(just_reset_selector)
+                
+                if found_element:
+                    # 打印获取到的真实元素的 outerHTML，用来核对是不是你要的 Just Reset 按钮
+                    outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
+                    print("=" * 60)
+                    print("[DEBUG] 成功捕获到 Just Reset 按钮的真实 HTML 内容如下：")
+                    print(outer_html)
+                    print("=" * 60)
 
-            # 1. 在弹窗 DIV 内部寻找并穿透 CF 人机验证
-            handle_cloudflare_in_popup_div(sb)
+                    print("[INFO] 正在点击 Just Reset 按钮...")
+                    sb.click(just_reset_selector)
+                else:
+                    raise Exception("未找到元素对象")
+            except Exception as e:
+                print(f"[ERROR] 没能找到 Just Reset 按钮，异常原因: {e}")
+                raise Exception("未找到 Just Reset 按钮元素")
 
-            # 留出 4 秒让 CF 服务器通过验证并变绿勾
-            time.sleep(4)
-
-            # 2. 执行诊断及点击 Just Reset 按钮
-            reset_success = click_just_reset_button(sb)
-
-            time.sleep(5)
+            time.sleep(3)
 
             # 读取 reset 后的剩余时间
             try:
@@ -262,13 +219,12 @@ def main():
                     start_clicked = True
                     time.sleep(3)
             except Exception:
-                print("[INFO] 未发现 Start 按钮或当前步骤无需点击。")
+                print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 截图并发送 Telegram
+            # 最终截图并发送 Telegram 通知
             sb.save_screenshot(screenshot_path)
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
-                f"🎯 Just Reset 点击成功: {'是' if reset_success else '否'}\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
                 f"▶️ Start按钮已点击: {'是' if start_clicked else '否'}"
             )
