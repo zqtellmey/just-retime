@@ -35,11 +35,11 @@ def send_telegram_message(message, image_path=None):
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name):
-    """执行 3 次物理点击，并根据隐藏框里是否有 Token 来返回 True 或 False"""
-    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 检测...")
+    """固定执行 3 次物理点击，每次间隔 2 秒，不判断成败直接执行后续动作"""
+    print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 穿透（固定尝试 3 次，间隔 2 秒）...")
     
-    # 先检查是不是本来就没有拦截
     try:
+        time.sleep(2)
         result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
             print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
@@ -47,27 +47,18 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    # 循环尝试 3 次点击，并检测 Token 是否成功生成
     for cf_attempt in range(3):
         try:
             print(f"[INFO] ({step_name}) 尝试物理 GUI 点击验证 (第 {cf_attempt + 1}/3 次)...")
             sb.uc_gui_click_captcha()
-            
-            # 每次点击后等待并检查 Token 是否吐出（最多等 3 秒）
-            for _ in range(3):
-                time.sleep(1)
-                token_val = sb.driver.execute_script('let el = document.querySelector("input[name=\'cf-turnstile-response\']"); return el ? el.value : "";')
-                if token_val and len(token_val.strip()) > 10:
-                    print(f"[INFO] ({step_name}) 验证成功！检测到有效 Token。")
-                    return True
         except Exception as e:
-            print(f"[WARN] ({step_name}) 第 {cf_attempt + 1} 次尝试异常: {e}")
+            print(f"[WARN] ({step_name}) 第 {cf_attempt + 1} 次点击异常: {e}")
         
-        print(f"[INFO] ({step_name}) 当前未检测到 Token，准备进行下一次尝试...")
-        time.sleep(1)
+        print(f"[INFO] ({step_name}) 等待 2 秒...")
+        time.sleep(2)
         
-    print(f"[WARN] ({step_name}) 3 次尝试后未检测到有效 Token。")
-    return False
+    print(f"[INFO] ({step_name}) 3 次固定点击完成，继续执行后续动作。")
+    return True
 
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
@@ -142,9 +133,8 @@ def main():
             print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 使用你提到的判断方式
-            if not handle_cloudflare_turnstile(sb, "登录页"):
-                print("[WARN] 登录页 Turnstile 未检测到成功 Token，按配置继续执行...")
+            # 处理登录页面的 CF 验证
+            handle_cloudflare_turnstile(sb, "登录页")
 
             # 点击 Sign In 按钮
             print("[INFO] 正在点击登录按钮...")
@@ -166,9 +156,8 @@ def main():
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(3)
 
-            # 弹窗里的验证同样使用判断方式
-            if not handle_cloudflare_turnstile(sb, "Reset弹窗"):
-                print("[WARN] Reset弹窗 Turnstile 未检测到成功 Token，按配置继续执行...")
+            # 处理可能再次出现的验证
+            handle_cloudflare_turnstile(sb, "Reset弹窗")
 
             # ==================== 查找并打印 Just Reset 按钮的完整 HTML ====================
             print("[INFO] 正在等待并查找 Just Reset 按钮...")
