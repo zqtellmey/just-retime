@@ -34,20 +34,6 @@ def send_telegram_message(message, image_path=None):
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
-def handle_cloudflare_in_popup(sb, step_name):
-    """在弹窗内部执行 Turnstile 验证穿透（尝试 3 次）"""
-    print(f"[INFO] ({step_name}) 开始处理人机验证...")
-
-    for i in range(3):
-        try:
-            print(f"[INFO] ({step_name}) 尝试第 {i+1}/3 次人机验证穿透...")
-            sb.uc_gui_click_captcha()
-        except Exception as e:
-            print(f"[WARN] ({step_name}) 第 {i+1} 次验证穿透跳过或未找到: {e}")
-        time.sleep(2)
-
-    print(f"[INFO] ({step_name}) 人机验证处理流程完成。")
-
 def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
     try:
@@ -60,56 +46,135 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
-def click_just_reset_button(sb):
-    """验证并尝试点击 Just Reset 按钮"""
-    print("[INFO] [诊断模式] 开始全面检测页面中是否存在 'Just Reset' 按钮...")
+def handle_cloudflare_in_popup_div(sb):
+    """专门针对 Reset 弹窗 DIV 内部的人机验证进行穿透与多次触发"""
+    print("[INFO] (Reset弹窗DIV) 开始深度检测并尝试处理弹窗内部的人机验证...")
 
-    # 1. 先用 JS 在页面全局深度搜寻该按钮节点
+    # 先调用一次 SB 内置穿透逻辑
+    try:
+        sb.uc_gui_click_captcha()
+    except Exception:
+        pass
+
+    # 使用语法修正后的 JS (带 IIFE 包装) 定位弹窗容器及内部的 Turnstile iframe
+    for attempt in range(3):
+        print(f"[INFO] (Reset弹窗DIV) 尝试第 {attempt + 1}/3 次深入定位弹窗与 CF 框...")
+        try:
+            cf_info = sb.execute_script("""
+                return (() => {
+                    const popup = document.getElementById('turnstile-timer-reset') || document.querySelector('div[role="dialog"]');
+                    if (!popup) {
+                        return { status: "popup_not_found" };
+                    }
+                    
+                    // 寻找弹窗内的 turnstile 容器或 iframe
+                    const iframe = popup.querySelector('iframe[src*="cloudflare"]') || popup.querySelector('iframe[src*="turnstile"]');
+                    if (iframe) {
+                        const rect = iframe.getBoundingClientRect();
+                        return {
+                            status: "iframe_found",
+                            x: rect.left + rect.width / 2,
+                            y: rect.top + rect.height / 2
+                        };
+                    }
+                    
+                    const rect = popup.getBoundingClientRect();
+                    return {
+                        status: "popup_found_no_iframe",
+                        x: rect.left + 35,
+                        y: rect.top + (rect.height / 2)
+                    };
+                })();
+            """)
+
+            print(f"[INFO] (Reset弹窗DIV) 弹窗及 CF 框探测结果: {cf_info}")
+
+            # 如果找到了具体坐标，使用 CDPTarget/PyAutoGUI 或 JS 模拟点击
+            if cf_info and cf_info.get("status") in ["iframe_found", "popup_found_no_iframe"]:
+                cx = cf_info.get("x")
+                cy = cf_info.get("y")
+                print(f"[INFO] 正在对算出的坐标 ({cx}, {cy}) 派发点击事件...")
+                
+                # 使用 JS 派发原生 Pointer/Click 事件穿透至深层元素
+                sb.execute_script(f"""
+                    (() => {{
+                        const el = document.elementFromPoint({cx}, {cy});
+                        if (el) {{
+                            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evtType => {{
+                                el.dispatchEvent(new MouseEvent(evtType, {{
+                                    bubbles: true,
+                                    cancelable: true,
+                                    clientX: {cx},
+                                    clientY: {cy}
+                                }}));
+                            }});
+                        }}
+                    }})();
+                """)
+
+        except Exception as e:
+            print(f"[WARN] 第 {attempt + 1} 次尝试穿透异常: {e}")
+
+        time.sleep(2)
+
+def click_just_reset_button(sb):
+    """诊断并点击弹窗 DIV 内部的 Just Reset 按钮 (使用 IIFE 修复 JS 语法错误)"""
+    print("[INFO] [诊断模式] 开始检测弹窗 DIV 中是否存在 'Just Reset' 按钮...")
+
+    # 1. 使用完全符合规范的 IIFE IIFE 封装 JS 脚本，防止 Illegal return 错误
     found_info = sb.execute_script("""
-        const btns = Array.from(document.querySelectorAll('button'));
-        const target = btns.find(b => b.textContent.includes('Just Reset'));
-        if (target) {
-            return {
-                found: true,
-                tagName: target.tagName,
-                className: target.className,
-                isVisible: target.offsetWidth > 0 && target.offsetHeight > 0,
-                text: target.textContent.trim()
-            };
-        }
-        return { found: false };
+        return (() => {
+            // 查寻包含 Just Reset 文本的所有按钮
+            const btns = Array.from(document.querySelectorAll('button'));
+            const target = btns.find(b => b.textContent && b.textContent.includes('Just Reset'));
+            
+            if (target) {
+                return {
+                    found: true,
+                    tagName: target.tagName,
+                    className: target.className,
+                    disabled: target.disabled,
+                    isVisible: target.offsetWidth > 0 && target.offsetHeight > 0,
+                    text: target.textContent.trim()
+                };
+            }
+            return { found: false, totalButtons: btns.length };
+        })();
     """)
 
-    print(f"[INFO] [诊断结果] JS 查询结果: {found_info}")
+    print(f"[INFO] [诊断结果] 弹窗内部按钮查询结果: {found_info}")
 
-    # 2. 尝试用 Selenium 标准 XPath 定位并点击
+    # 2. 优先尝试 Selenium 标准 XPath 点击
     just_reset_xpath = '//button[contains(normalize-space(.), "Just Reset")]'
     try:
         print("[INFO] 尝试使用 Selenium Standard XPath 定位点击...")
-        sb.wait_for_element(just_reset_xpath, timeout=8)
+        sb.wait_for_element(just_reset_xpath, timeout=6)
         sb.click(just_reset_xpath)
         print("[SUCCESS] 成功通过 Selenium 定位并点击了 Just Reset 按钮！")
         return True
     except Exception as e:
-        print(f"[WARN] Selenium 标准点击失败: {e}")
+        print(f"[WARN] Selenium 标准点击未成功: {e}")
 
-    # 3. 如果 Selenium 点击失败，但 JS 诊断找到了元素，使用 JS 强制强行点击
+    # 3. 如果找到元素但被遮挡或禁用，使用 JS 直接点击
     if found_info and found_info.get("found"):
-        print("[INFO] 尝试通过 JavaScript 脚本直接触发强行点击 (.click())...")
+        print("[INFO] 尝试通过 JS 强制触发 `.click()`...")
         clicked = sb.execute_script("""
-            const btns = Array.from(document.querySelectorAll('button'));
-            const target = btns.find(b => b.textContent.includes('Just Reset'));
-            if (target) {
-                target.click();
-                return true;
-            }
-            return false;
+            return (() => {
+                const btns = Array.from(document.querySelectorAll('button'));
+                const target = btns.find(b => b.textContent && b.textContent.includes('Just Reset'));
+                if (target) {
+                    target.disabled = false; // 防范处于禁用状态
+                    target.click();
+                    return true;
+                }
+                return false;
+            })();
         """)
         if clicked:
             print("[SUCCESS] 成功通过 JS 强制点击了 Just Reset 按钮！")
             return True
 
-    print("[ERROR] 未能找到或点击 Just Reset 按钮！")
+    print("[ERROR] 未能成功点击 Just Reset 按钮！")
     return False
 
 def main():
@@ -141,7 +206,10 @@ def main():
             time.sleep(2)
             
             # 登录页面的 CF 穿透
-            handle_cloudflare_in_popup(sb, "登录页")
+            try:
+                sb.uc_gui_click_captcha()
+            except Exception:
+                pass
             time.sleep(3)
 
             print("[INFO] 正在点击登录按钮...")
@@ -160,14 +228,14 @@ def main():
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=15)
             sb.click('button[aria-label="Reset timer"]')
             
-            # 等待 Reset 弹窗完全渲染
+            # 等待 Reset 弹窗 DIV 完全渲染
             print("[INFO] 等待 Reset 弹窗 DIV 渲染...")
             time.sleep(4)
 
-            # 1. 处理弹窗内的 CF 人机验证
-            handle_cloudflare_in_popup(sb, "Reset弹窗DIV")
+            # 1. 在弹窗 DIV 内部寻找并穿透 CF 人机验证
+            handle_cloudflare_in_popup_div(sb)
 
-            # 留出时间等待人机打勾及解锁按钮
+            # 留出 4 秒让 CF 服务器通过验证并变绿勾
             time.sleep(4)
 
             # 2. 执行诊断及点击 Just Reset 按钮
