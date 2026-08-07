@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+from PIL import Image, ImageDraw
 from seleniumbase import SB
 
 # ==================== 配置项（从 GitHub Secrets 环境变量读取） ====================
@@ -34,18 +35,24 @@ def send_telegram_message(message, image_path=None):
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
+def draw_red_dot_on_image(image_path, x, y, radius=8):
+    """直接在生成的截图文件上画一个红点，不依赖浏览器 JS，绝对不崩溃"""
+    try:
+        if not os.path.exists(image_path):
+            return
+        img = Image.open(image_path)
+        draw = ImageDraw.Draw(img)
+        # 画红点 (带白色外边框，方便高亮)
+        draw.ellipse((x - radius - 2, y - radius - 2, x + radius + 2, y + radius + 2), fill="white")
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill="red")
+        img.save(image_path)
+        print(f"[INFO] 已在截图文件 ({x}, {y}) 位置标注红点。")
+    except Exception as e:
+        print(f"[WARN] 截图画红点失败: {e}")
+
 def handle_cloudflare_turnstile(sb, step_name):
     """固定执行 3 次物理点击，每次间隔 2 秒，不判断成败直接执行后续动作"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 穿透（固定尝试 3 次，间隔 2 秒）...")
-    
-    try:
-        time.sleep(2)
-        result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
-        if not result:
-            print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
-            return True
-    except Exception:
-        pass
 
     for cf_attempt in range(3):
         try:
@@ -72,69 +79,6 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
-def debug_check_elements(sb):
-    """预先查找页面上的关键元素并输出结果，辅助排查"""
-    print("=" * 40)
-    print("[DEBUG] 开始检查页面元素定位状态：")
-    
-    selectors = {
-        "Cookie 按钮 (button.cky-btn-accept)": "button.cky-btn-accept",
-        "邮箱输入框 (input[name='Email'])": "input[name='Email']",
-        "密码输入框 (//*[@id='password'])": "//*[@id='password']",
-        "密码输入框备用 (input[name='Password'])": "input[name='Password']",
-        "提交按钮 (button[type='submit'])": "button[type='submit']",
-        "CF 响应 Token 隐藏框 (input[name='cf-turnstile-response'])": "input[name='cf-turnstile-response']"
-    }
-    
-    for name, selector in selectors.items():
-        try:
-            elem = sb.find_element(selector, timeout=2)
-            if elem:
-                print(f"  [√] {name} -> 查找成功")
-        except Exception:
-            print(f"  [×] {name} -> 未找到")
-            
-    print("=" * 40)
-
-def click_by_coordinates_with_red_dot(sb, x, y):
-    """使用 PyAutoGUI 进行绝对坐标物理点击，并在网页对应位置注入红点进行可视化标示"""
-    print(f"[INFO] 正在执行坐标点击 -> X: {x}, Y: {y}")
-    
-    # 1. 在网页上通过 JS 注入红点标记，方便通过截图校准位置
-    dot_js = f"""
-    (function() {{
-        var existingDot = document.getElementById('debug-click-red-dot');
-        if (existingDot) {{ existingDot.remove(); }}
-        
-        var dot = document.createElement('div');
-        dot.id = 'debug-click-red-dot';
-        dot.style.position = 'fixed';
-        dot.style.left = '{x}px';
-        dot.style.top = '{y}px';
-        dot.style.width = '16px';
-        dot.style.height = '16px';
-        dot.style.backgroundColor = 'red';
-        dot.style.borderRadius = '50%';
-        dot.style.border = '2px solid white';
-        dot.style.boxShadow = '0 0 10px black';
-        dot.style.zIndex = '999999';
-        dot.style.transform = 'translate(-50%, -50%)';
-        document.body.appendChild(dot);
-    }})();
-    """
-    try:
-        sb.driver.execute_script(dot_js)
-    except Exception as e:
-        print(f"[WARN] 注入红点标记异常: {e}")
-
-    # 2. 使用 PyAutoGUI 执行物理鼠标点击
-    try:
-        import pyautogui
-        pyautogui.click(x, y)
-        print("[INFO] PyAutoGUI 物理坐标点击完成。")
-    except Exception as e:
-        print(f"[ERROR] PyAutoGUI 点击异常: {e}")
-
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
@@ -151,7 +95,6 @@ def main():
             time.sleep(4)
 
             accept_cookies_if_present(sb)
-            debug_check_elements(sb)
 
             print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=15)
@@ -184,17 +127,21 @@ def main():
 
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 使用坐标点击 Just Reset 按钮（带红点） ====================
-            print("[INFO] 准备通过绝对坐标点击弹窗中的 Just Reset 按钮...")
-            
-            # 初始设定的坐标位置（可根据后续生成的截图红点位置进行调整）
+            # ==================== 使用 PyAutoGUI 绝对坐标点击 Just Reset 按钮 ====================
             TARGET_X = 590
             TARGET_Y = 795
             
-            click_by_coordinates_with_red_dot(sb, TARGET_X, TARGET_Y)
+            print(f"[INFO] 正在执行纯物理坐标点击 -> X: {TARGET_X}, Y: {TARGET_Y}")
+            try:
+                import pyautogui
+                pyautogui.click(TARGET_X, TARGET_Y)
+                print("[INFO] PyAutoGUI 物理坐标点击完成。")
+            except Exception as e:
+                print(f"[ERROR] PyAutoGUI 点击异常: {e}")
+
             time.sleep(3)
 
-            # 读取 reset 后的剩余时间
+            # 读取 reset 后的剩余时间（纯 Selenium 选择器，不调 JS）
             try:
                 remaining_time_elem = sb.find_element('span.hidden.sm\\:inline')
                 remaining_time_text = remaining_time_elem.text
@@ -215,8 +162,10 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 最终截图并发送 Telegram 通知（截图会带上红点位置，方便你后续调整 X 和 Y）
+            # 截取最终图片，并在本地图片文件上标注红点
             sb.save_screenshot(screenshot_path)
+            draw_red_dot_on_image(screenshot_path, TARGET_X, TARGET_Y)
+
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
