@@ -37,24 +37,48 @@ def send_telegram_message(message, image_path=None):
 
 def handle_cloudflare_turnstile(sb, step_name=""):
     """
-    参照 FalixNodes 项目的过 CF 人机验证逻辑
-    全盘 try...except 保护，物理点击失败也不会导致主程序崩溃
+    针对模态框弹窗强化的过 CF 人机验证逻辑
+    包含 GUI 点击与 iframe 深度切入双重保护
     """
     prefix = f"({step_name}) " if step_name else ""
     try:
         time.sleep(2)
-        # 探测页面是否存在 turnstile 验证框
+        # 1. 探测主页面是否存在 turnstile 响应框
         result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
             print(f"[INFO] {prefix}未检测到 Turnstile 拦截或已自动通过。")
             return True
         
-        print(f"[INFO] {prefix}发现 Turnstile 拦截，尝试物理 GUI 点击...")
+        print(f"[INFO] {prefix}发现 Turnstile 拦截，优先尝试物理 GUI 点击...")
         sb.uc_gui_click_captcha()
-        time.sleep(5)
+        time.sleep(3)
+
+        # 校验 GUI 点击是否成功注入 Token
+        token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
+        if token and len(token.strip()) > 0:
+            return True
+
+        # 2. 若 GUI 点击因弹窗偏移失效，降级策略：查找 iframe 并进行切入点击
+        print(f"[INFO] {prefix}GUI 点击未触发 Token，尝试深度切入 Turnstile iframe...")
+        iframes = sb.find_elements('iframe[src*="challenges.cloudflare.com"]')
+        for idx, frame in enumerate(iframes):
+            try:
+                sb.switch_to_frame(frame)
+                time.sleep(1)
+                # 尝试点击 iframe 内部的验证复选框
+                if sb.is_element_visible('#challenge-stage') or sb.is_element_visible('input[type="checkbox"]'):
+                    print(f"[INFO] {prefix}在 iframe[{idx}] 内部找到验证框，执行点击...")
+                    sb.click('body')
+                    time.sleep(2)
+                sb.switch_to_parent_frame()
+            except Exception as f_err:
+                print(f"[WARN] {prefix}切入 iframe[{idx}] 点击失败: {f_err}")
+                sb.switch_to_default_content()
+
         return True
     except Exception as e:
         print(f"[WARN] {prefix}执行 Turnstile 验证穿透时捕获到异常: {e}")
+        sb.switch_to_default_content()
         return False
 
 def accept_cookies_if_present(sb):
@@ -74,12 +98,11 @@ def main():
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
         sys.exit(1)
 
-    # 🎯 核心防崩配置：完全照搬 FalixNodes 项目的 SB 启动参数
     opts = {
         "uc": True,                 # 开启反爬穿透
-        "test": True,               # 开启测试防护模式，防止底层 CDP 握手崩溃
+        "test": True,               # 开启测试防护模式
         "locale": "zh",             # 语言偏好
-        "headed": False,            # 搭配 UC 模式最稳妥的后台渲染方式，不卡死 Display
+        "headed": False,            # 后台渲染方式
         "timeout_multiplier": 0.5   # 适当提升超时容忍度
     }
 
@@ -87,7 +110,6 @@ def main():
 
     try:
         with SB(**opts) as sb:
-            # 加上页面加载超时防护，防止页面假死卡崩驱动
             sb.driver.set_page_load_timeout(45)
             sb.driver.set_window_size(1920, 1080)
             
@@ -98,27 +120,21 @@ def main():
             sb.driver.get(LOGIN_URL)
             time.sleep(5)
 
-            # 处理 Cookie 询问框
             accept_cookies_if_present(sb)
 
-            # 填写邮箱
             print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=15)
             sb.type('input[name="Email"]', USER_EMAIL)
             time.sleep(2)
 
-            # 填写密码
             print("[INFO] 正在输入密码...")
             sb.wait_for_element('//*[@id="password"]', timeout=15)
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
             time.sleep(2)
 
-            # 登录页 CF 人机验证检测与处理（3 次循环尝试）
             print("[INFO] 启动登录页 Cloudflare 人机验证检测...")
             for cf_attempt in range(3):
                 handle_cloudflare_turnstile(sb, f"登录页第 {cf_attempt + 1} 次")
-                
-                # 检查 Token 是否注入成功
                 try:
                     cf_token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
                     if cf_token and len(cf_token.strip()) > 0:
@@ -128,12 +144,10 @@ def main():
                     pass
                 time.sleep(3)
 
-            # 点击 Sign In 按钮
             print("[INFO] 正在点击登录按钮...")
             sb.click('button[type="submit"]')
             time.sleep(5)
 
-            # 截图并发送 Telegram
             sb.save_screenshot(screenshot_path)
             send_telegram_message("📸 【步骤 1/2】账号登录表单已提交。", screenshot_path)
 
@@ -142,7 +156,6 @@ def main():
             sb.driver.get(TARGET_URL)
             time.sleep(5)
 
-            # 📸 1. 跳转到后台页面后截图发送 Telegram
             sb.save_screenshot(screenshot_path)
             send_telegram_message("📸 【步骤 2/2】已跳转至目标后台页面现场。", screenshot_path)
 
@@ -150,15 +163,17 @@ def main():
             print("[INFO] 正在点击 Reset timer...")
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=20)
             sb.click('button[aria-label="Reset timer"]')
-            time.sleep(3)
 
-            # 📸 2. 点击 Reset timer 按钮后截图发送 Telegram
+            # 💡 关键修改：多等待 4 秒，确保弹窗完全展开、动画结束、CF 控件完全装载
+            print("[INFO] 等待 Reset 弹窗及 Turnstile 控件稳定加载...")
+            time.sleep(4)
+
             sb.save_screenshot(screenshot_path)
             send_telegram_message("📸 【步骤 2/2】已点击 Reset timer 按钮，弹窗界面现场。", screenshot_path)
 
-            # 🎯 修复重点：Reset 弹窗的 CF 人机验证同样进行 3 次循环尝试，确保通过
+            # Reset 弹窗人机验证重试机制
             print("[INFO] 启动 Reset 弹窗 Cloudflare 人机验证检测...")
-            for cf_attempt in range(3):
+            for cf_attempt in range(4):
                 handle_cloudflare_turnstile(sb, f"Reset 弹窗第 {cf_attempt + 1} 次")
                 
                 try:
@@ -181,7 +196,7 @@ def main():
                 if found_element:
                     outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
                     print("=" * 60)
-                    print("[DEBUG] 成功捕获到 Just Reset 按钮的 HTML：")
+                    print("[DEBUG] 成功捕获到 Just Reset 按钮 HTML：")
                     print(outer_html)
                     print("=" * 60)
 
@@ -190,14 +205,13 @@ def main():
                 else:
                     raise Exception("未找到元素对象")
             except Exception as e:
-                # 📸 如果查找按钮失败，截图推送 Telegram
                 sb.save_screenshot(screenshot_path)
                 send_telegram_message(f"⚠️ 【异常现场】查找 Just Reset 按钮失败！报错: {e}", screenshot_path)
                 raise Exception(f"未找到 Just Reset 按钮元素: {e}")
 
             time.sleep(3)
 
-            # 读取 reset 后的剩余时间
+            # 读取剩余时间
             try:
                 remaining_time_elem = sb.find_element('span.hidden.sm\\:inline')
                 remaining_time_text = remaining_time_elem.text
@@ -206,7 +220,7 @@ def main():
                 remaining_time_text = "未能成功获取剩余时间"
                 print(f"[WARN] {remaining_time_text}")
 
-            # 检查 Start 按钮是否存在，存在则点击
+            # 检查 Start 按钮是否存在
             start_clicked = False
             try:
                 start_btn = sb.find_element('xpath://button[contains(normalize-space(text()), "Start")]')
@@ -218,7 +232,6 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 最终截图并发送 Telegram 通知
             sb.save_screenshot(screenshot_path)
             msg = (
                 f"🎉 【步骤 2/2】操作执行完成！\n"
