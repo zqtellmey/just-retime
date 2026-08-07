@@ -40,7 +40,6 @@ def handle_cloudflare_turnstile(sb, step_name):
     
     try:
         time.sleep(2)
-        # 1:1 对齐成功项目的探测机制：检查是否存在验证框
         result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
             print(f"[INFO] ({step_name}) 未检测到 Turnstile 拦截或已自动通过。")
@@ -48,14 +47,12 @@ def handle_cloudflare_turnstile(sb, step_name):
     except Exception:
         pass
 
-    # 最多 3 次循环重试，确保图块或点击交互能够顺利通过并吐出 Token
     for cf_attempt in range(3):
         try:
             print(f"[INFO] ({step_name}) 发现 Turnstile 拦截，尝试物理 GUI 点击 (第 {cf_attempt + 1} 次)...")
             sb.uc_gui_click_captcha()
             time.sleep(5)
             
-            # 核心判断：根据 input 内是否有 Token 密文来判定是否成功打勾
             cf_token_value = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
             if cf_token_value and len(cf_token_value.strip()) > 0:
                 print(f"[INFO] ({step_name}) 验证成功！云盾 Token 令牌已顺利生成填充。")
@@ -142,7 +139,7 @@ def main():
             print("[INFO] 延时 2 秒...")
             time.sleep(2)
             
-            # 处理登录页面的 CF 验证（应用新版循环校验机制）
+            # 处理登录页面的 CF 验证
             handle_cloudflare_turnstile(sb, "登录页")
 
             # 点击 Sign In 按钮
@@ -159,7 +156,7 @@ def main():
             sb.open(TARGET_URL)
             time.sleep(5)
 
-            # 处理后台页面的 CF 验证（应用新版循环校验机制）
+            # 处理后台页面的 CF 验证
             handle_cloudflare_turnstile(sb, "后台页")
 
             # 点击 Reset timer 按钮
@@ -171,9 +168,22 @@ def main():
             # 处理可能再次出现的验证
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # 点击 Just Reset 按钮
-            print("[INFO] 正在点击 Just Reset...")
-            sb.click('button:has(i.bi-arrow-clockwise)')
+            # 点击 Just Reset 按钮（采用鼠标悬停移动 + JS 强制触发点击，确保 100% 触发）
+            print("[INFO] 正在查找并点击 Just Reset 按钮...")
+            just_reset_selector = 'button:has(i.bi-arrow-clockwise)'
+            sb.wait_for_element(just_reset_selector, timeout=15)
+            
+            try:
+                # 方法 A：模拟鼠标移动到该元素上方并悬停，再进行点击
+                print("[INFO] 尝试通过鼠标移动悬停并点击...")
+                sb.move_to_element_and_click(just_reset_selector)
+            except Exception as e:
+                print(f"[WARN] 鼠标移动点击失败，尝试使用 JS 强制触发点击: {e}")
+                # 方法 B：通过 JavaScript 直接定位并点击该按钮
+                sb.driver.execute_script(
+                    'Array.from(document.querySelectorAll("button")).find(el => el.textContent.includes("Just Reset") || el.innerHTML.includes("bi-arrow-clockwise")).click();'
+                )
+            
             time.sleep(3)
 
             # 读取 reset 后的剩余时间
