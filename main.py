@@ -63,12 +63,11 @@ def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
     try:
         print("[INFO] 检查是否存在 Cookie 询问框...")
-        # 对应源码中的 Accept All 按钮
         cookie_btn = sb.find_element('button.cky-btn-accept', timeout=3)
         if cookie_btn:
             print("[INFO] 发现 Cookie 询问框，正在点击 'Accept All'...")
             sb.click('button.cky-btn-accept')
-            time.sleep(1)
+            time.sleep(2) # 点击后延时 2 秒
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
@@ -90,17 +89,23 @@ def main():
             # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
 
-            # 填写邮箱 (对应源码中 id="login", name="Email")
+            # 填写邮箱
             print("[INFO] 正在输入邮箱...")
-            sb.wait_for_element('input[name="Email"]', timeout=10)
+            sb.wait_for_element('input[name="Email"]', timeout=15)
             sb.type('input[name="Email"]', USER_EMAIL)
-            time.sleep(1)
             
-            # 填写密码 (对应源码中 id="password", name="Password")
+            # --- 增加 2 秒延时，等待页面及焦点稳定 ---
+            print("[INFO] 延时 2 秒...")
+            time.sleep(2)
+            
+            # 填写密码：先额外等待元素出现并滚动到可见区域
             print("[INFO] 正在输入密码...")
-            sb.wait_for_element('input[name="Password"]', timeout=15)
-            sb.type('input[name="Password"]', FIXED_PASSWORD)
-            time.sleep(1)
+            sb.wait_for_element('//*[@id="password"]', timeout=15)
+            sb.type('//*[@id="password"]', FIXED_PASSWORD)
+            
+            # --- 再次延时 2 秒，确保输入完成且触发可能的页面事件 ---
+            print("[INFO] 延时 2 秒...")
+            time.sleep(2)
             
             # 处理登录页面的 CF 验证
             handle_cloudflare_turnstile(sb, "登录页")
