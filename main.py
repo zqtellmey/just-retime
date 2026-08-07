@@ -2,6 +2,7 @@ import os
 import time
 import requests
 from seleniumbase import SB
+from selenium.webdriver.common.action_chains import ActionChains
 
 # ==================== 配置项（从 GitHub Secrets 环境变量读取） ====================
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
@@ -100,10 +101,9 @@ def click_at_coordinates_with_red_dot(sb, x, y):
     """在指定坐标执行点击，并在页面上生成一个醒目的红色圆点标记用于定位校准"""
     print(f"[INFO] 正在执行坐标点击 -> X: {x}, Y: {y}")
     
-    # 注入红点和点击逻辑
+    # 注入红点元素
     js_code = f"""
     (function() {{
-        // 创建红点元素
         var dot = document.createElement('div');
         dot.style.position = 'fixed';
         dot.style.left = '{x}px';
@@ -124,17 +124,21 @@ def click_at_coordinates_with_red_dot(sb, x, y):
     except Exception:
         pass
     
-    # 稍微停顿 1 秒让你在截图里能清晰看清红点位置
     time.sleep(1)
     
-    # 使用 SeleniumBase 提供的 动作链基于视口坐标进行点击
+    # 使用标准 ActionChains 基于绝对坐标进行安全点击
     try:
-        sb.click_coordinate(x, y)
-    except Exception:
-        # 备用坐标点击方案
-        actions = sb.get_action_chains()
+        actions = ActionChains(sb.driver)
         actions.move_by_offset(x, y).click().perform()
         actions.reset_actions()
+    except Exception as e:
+        print(f"[WARN] ActionChains 点击异常，尝试使用 JS 模拟点击坐标: {e}")
+        sb.driver.execute_script(f"""
+            var elem = document.elementFromPoint({x}, {y});
+            if (elem) {{
+                elem.click();
+            }}
+        """)
 
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
@@ -202,7 +206,7 @@ def main():
             # ==================== 使用坐标点击 Just Reset 按钮（带红点提示） ====================
             print("[INFO] 准备通过坐标点击弹窗中的 Just Reset 按钮...")
             
-            # 这里的坐标可以根据后续截图上的红点位置进行微调
+            # 初始设定的坐标位置（可根据运行后的截图红点位置调整）
             TARGET_X = 590
             TARGET_Y = 795
             
@@ -230,7 +234,7 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 最终截图并发送 Telegram 通知（带红点的截图会通过 Telegram 发送给你，方便你检查位置对不对）
+            # 最终截图并发送 Telegram 通知
             sb.save_screenshot(screenshot_path)
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
