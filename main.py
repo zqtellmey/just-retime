@@ -16,12 +16,11 @@ USER_EMAIL = os.getenv("USER_EMAIL", "")
 FIXED_PASSWORD = os.getenv("FIXED_PASSWORD", "")
 # ======================================================================
 
-# ==================== 坐标调试区 ====================
-# 直接修改这两个绝对坐标，红点和点击操作都会固定在这里
-# 观察红点截图，不断微调这两个数值，直到红点准确落在 CHECKBOX 上
+# ==================== 坐标调试区（专门针对 Reset 弹窗） ====================
+# 请在这里直接修改 X 和 Y 坐标，不断微调直到红点落在弹窗的 CHECKBOX 上
 DEBUG_X = 960
 DEBUG_Y = 540
-# ==================================================
+# ======================================================================
 
 def send_telegram_message(message, image_path=None):
     """发送消息和可选的截图到 Telegram"""
@@ -56,44 +55,57 @@ def draw_red_dot_on_screenshot(image_path, x, y, radius=15):
     except Exception as e:
         print(f"[WARN] 绘制红点失败: {e}")
 
-def handle_cloudflare_turnstile(sb, step_name=""):
-    """
-    直接使用固定 DEBUG_X 和 DEBUG_Y 坐标进行红点测试与点击
-    """
+def handle_login_turnstile(sb, step_name=""):
+    """登录页原有的正常验证逻辑（不使用红点调试）"""
+    prefix = f"({step_name}) " if step_name else ""
+    try:
+        time.sleep(2)
+        result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
+        if not result:
+            return True
+        
+        print(f"[INFO] {prefix}登录页检测到 Turnstile，执行默认穿透...")
+        sb.uc_gui_click_captcha()
+        time.sleep(3)
+        return True
+    except Exception as e:
+        print(f"[WARN] {prefix}登录页验证异常: {e}")
+        return False
+
+def handle_popup_turnstile_debug(sb, step_name=""):
+    """专为 Reset 弹窗设计的红点调试与固定坐标点击逻辑"""
     prefix = f"({step_name}) " if step_name else ""
     screenshot_path = "step_screenshot.png"
     try:
         time.sleep(2)
-        # 1. 探测主页面是否存在 turnstile 响应框
         result = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']") !== null')
         if not result:
             print(f"[INFO] {prefix}未检测到 Turnstile 拦截或已自动通过。")
             return True
         
-        print(f"[INFO] {prefix}发现 Turnstile 拦截，正在指定坐标 ({DEBUG_X}, {DEBUG_Y}) 处画红点并点击...")
+        print(f"[INFO] {prefix}弹窗拦截触发，正在固定坐标 ({DEBUG_X}, {DEBUG_Y}) 处画红点并点击...")
 
-        # 2. 立即截图并画红点发送到 Telegram 供你观察
+        # 1. 截图并画红点发给你
         sb.save_screenshot(screenshot_path)
         draw_red_dot_on_screenshot(screenshot_path, DEBUG_X, DEBUG_Y)
         send_telegram_message(
-            f"🎯 <b>[坐标调试]</b> {step_name}\n"
+            f"🎯 <b>[弹窗坐标调试]</b> {step_name}\n"
             f"<b>当前测试坐标: ({DEBUG_X}, {DEBUG_Y})</b>", 
             screenshot_path
         )
 
-        # 3. 执行物理 GUI 点击
+        # 2. 点击指定坐标
         sb.uc_gui_click_x_y(DEBUG_X, DEBUG_Y)
         time.sleep(3)
 
-        # 4. 校验 Token 是否注入成功
         token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']")?.value')
         if token and len(token.strip()) > 0:
-            print(f"[INFO] {prefix}坐标 ({DEBUG_X}, {DEBUG_Y}) 点击成功，Token 已注入！")
+            print(f"[INFO] {prefix}弹窗坐标 ({DEBUG_X}, {DEBUG_Y}) 点击成功，Token 已注入！")
             return True
 
         return True
     except Exception as e:
-        print(f"[WARN] {prefix}执行 Turnstile 验证穿透时捕获到异常: {e}")
+        print(f"[WARN] {prefix}弹窗验证调试异常: {e}")
         return False
 
 def accept_cookies_if_present(sb):
@@ -147,13 +159,13 @@ def main():
             sb.type('//*[@id="password"]', FIXED_PASSWORD)
             time.sleep(2)
 
-            print("[INFO] 启动登录页 Cloudflare 人机验证检测...")
+            print("[INFO] 启动登录页人机验证检测...")
             for cf_attempt in range(3):
-                handle_cloudflare_turnstile(sb, f"登录页第 {cf_attempt + 1} 次")
+                handle_login_turnstile(sb, f"登录页第 {cf_attempt + 1} 次")
                 try:
                     cf_token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
                     if cf_token and len(cf_token.strip()) > 0:
-                        print("[INFO] 登录页 Turnstile Token 验证成功注入！")
+                        print("[INFO] 登录页验证成功注入！")
                         break
                 except Exception:
                     pass
@@ -185,10 +197,10 @@ def main():
             sb.save_screenshot(screenshot_path)
             send_telegram_message("📸 【步骤 2/2】已点击 Reset timer 按钮，弹窗界面现场。", screenshot_path)
 
-            # Reset 弹窗人机验证重试机制
-            print("[INFO] 启动 Reset 弹窗 Cloudflare 人机验证检测...")
+            # Reset 弹窗人机验证重试机制（这里会触发专用的红点调试逻辑）
+            print("[INFO] 启动 Reset 弹窗人机验证调试...")
             for cf_attempt in range(4):
-                handle_cloudflare_turnstile(sb, f"Reset 弹窗第 {cf_attempt + 1} 次")
+                handle_popup_turnstile_debug(sb, f"Reset 弹窗第 {cf_attempt + 1} 次")
                 
                 try:
                     cf_token = sb.driver.execute_script('return document.querySelector("input[name=\'cf-turnstile-response\']").value')
