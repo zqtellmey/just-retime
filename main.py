@@ -1,7 +1,6 @@
 import os
 import time
 import requests
-from PIL import Image, ImageDraw
 from seleniumbase import SB
 
 # ==================== 配置项（从 GitHub Secrets 环境变量读取） ====================
@@ -35,21 +34,6 @@ def send_telegram_message(message, image_path=None):
     except Exception as e:
         print(f"[ERROR] 发送 Telegram 消息失败: {e}")
 
-def draw_red_dot_on_image(image_path, x, y, radius=8):
-    """直接在生成的截图文件上画一个红点，不依赖浏览器 JS，绝对不崩溃"""
-    try:
-        if not os.path.exists(image_path):
-            return
-        img = Image.open(image_path)
-        draw = ImageDraw.Draw(img)
-        # 画红点 (带白色外边框，方便高亮)
-        draw.ellipse((x - radius - 2, y - radius - 2, x + radius + 2, y + radius + 2), fill="white")
-        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill="red")
-        img.save(image_path)
-        print(f"[INFO] 已在截图文件 ({x}, {y}) 位置标注红点。")
-    except Exception as e:
-        print(f"[WARN] 截图画红点失败: {e}")
-
 def handle_cloudflare_turnstile(sb, step_name):
     """固定执行 3 次物理点击，每次间隔 2 秒，不判断成败直接执行后续动作"""
     print(f"[INFO] ({step_name}) 开始执行 Cloudflare Turnstile 穿透（固定尝试 3 次，间隔 2 秒）...")
@@ -79,12 +63,48 @@ def accept_cookies_if_present(sb):
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
 
+def draw_red_marker_and_click(sb, x, y):
+    """结合参考代码的标准绝对定位红点绘制，并执行物理坐标点击"""
+    print(f"[INFO] 正在目标位置 ({x}, {y}) 绘制红点并执行点击...")
+    
+    # 采用你提供的标准绝对定位 Marker JS 脚本
+    js_marker = f"""
+    (() => {{
+        const marker = document.createElement('div');
+        marker.style.position = 'absolute';
+        marker.style.left = '{x}px';
+        marker.style.top = '{y}px';
+        marker.style.width = '14px';
+        marker.style.height = '14px';
+        marker.style.backgroundColor = 'red';
+        marker.style.borderRadius = '50%';
+        marker.style.border = '2px solid white';
+        marker.style.boxShadow = '0 0 6px rgba(0,0,0,0.8)';
+        marker.style.zIndex = '999999';
+        marker.style.transform = 'translate(-50%, -50%)';
+        document.body.appendChild(marker);
+    }})();
+    """
+    try:
+        sb.execute_script(js_marker)
+        print("[INFO] 红点标记注入成功。")
+    except Exception as e:
+        print(f"[WARN] 注入红点标记失败: {e}")
+
+    # 执行坐标物理点击
+    try:
+        import pyautogui
+        pyautogui.click(x, y)
+        print(f"[INFO] 已在物理坐标 ({x}, {y}) 完成点击。")
+    except Exception as e:
+        print(f"[ERROR] 物理点击异常: {e}")
+
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
         return
 
-    # 使用 SeleniumBase uc 模式启动浏览器
+    # 使用 SeleniumBase uc 模式启动浏览器，强制设置视口确保坐标映射统一
     with SB(uc=True, test=True, locale="zh") as sb:
         screenshot_path = "step_screenshot.png"
         
@@ -127,21 +147,14 @@ def main():
 
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 使用 PyAutoGUI 绝对坐标点击 Just Reset 按钮 ====================
+            # ==================== 使用坐标点击 Just Reset 按钮（带红点） ====================
             TARGET_X = 590
             TARGET_Y = 795
             
-            print(f"[INFO] 正在执行纯物理坐标点击 -> X: {TARGET_X}, Y: {TARGET_Y}")
-            try:
-                import pyautogui
-                pyautogui.click(TARGET_X, TARGET_Y)
-                print("[INFO] PyAutoGUI 物理坐标点击完成。")
-            except Exception as e:
-                print(f"[ERROR] PyAutoGUI 点击异常: {e}")
-
+            draw_red_marker_and_click(sb, TARGET_X, TARGET_Y)
             time.sleep(3)
 
-            # 读取 reset 后的剩余时间（纯 Selenium 选择器，不调 JS）
+            # 读取 reset 后的剩余时间
             try:
                 remaining_time_elem = sb.find_element('span.hidden.sm\\:inline')
                 remaining_time_text = remaining_time_elem.text
@@ -162,10 +175,8 @@ def main():
             except Exception:
                 print("[INFO] 未发现 Start 按钮或当前无需点击。")
 
-            # 截取最终图片，并在本地图片文件上标注红点
+            # 截取带有页面红点的最终图像发送 Telegram
             sb.save_screenshot(screenshot_path)
-            draw_red_dot_on_image(screenshot_path, TARGET_X, TARGET_Y)
-
             msg = (
                 f"【步骤 2/2】操作执行完成！\n"
                 f"⏱️ 剩余时间: {remaining_time_text}\n"
