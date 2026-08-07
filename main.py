@@ -105,6 +105,39 @@ def debug_check_elements(sb):
             
     print("=" * 40)
 
+def click_just_reset_button(sb, timeout=15):
+    """针对动态 DIV 弹窗中的 Just Reset 按钮进行多重精准匹配与点击"""
+    print("[INFO] 开始查找并点击弹窗中的 'Just Reset' 按钮...")
+    
+    js_find_and_click = """
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const targetBtn = buttons.find(btn => btn.innerText && btn.innerText.includes('Just Reset'));
+        if (targetBtn) {
+            targetBtn.scrollIntoView({block: 'center'});
+            targetBtn.click();
+            return targetBtn.outerHTML;
+        }
+        return null;
+    """
+    
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        try:
+            # 优先使用 JS 方式全局检测文本匹配的按钮（绕过动画与模板注释屏蔽）
+            html_result = sb.driver.execute_script(js_find_and_click)
+            if html_result:
+                print("=" * 60)
+                print("[DEBUG] 成功找到并触发点击 Just Reset 按钮，真实 HTML 节点如下：")
+                print(html_result)
+                print("=" * 60)
+                return True
+        except Exception as e:
+            print(f"[DEBUG] 轮询查找 Just Reset 按钮中... ({e})")
+        
+        time.sleep(1)
+        
+    raise Exception(f"在 {timeout} 秒内未能定位并点击到 Just Reset 按钮。")
+
 def main():
     if not USER_EMAIL or not FIXED_PASSWORD or not LOGIN_URL or not TARGET_URL:
         print("[ERROR] 缺少必要的环境变量（USER_EMAIL, FIXED_PASSWORD, LOGIN_URL, TARGET_URL），请检查配置。")
@@ -168,35 +201,11 @@ def main():
             sb.click('button[aria-label="Reset timer"]')
             time.sleep(3)
 
-            # 处理可能再次出现的验证
+            # 处理可能再次出现的验证（弹窗内的 Turnstile 验证）
             handle_cloudflare_turnstile(sb, "Reset弹窗")
 
-            # ==================== 查找并打印 Just Reset 按钮的完整 HTML ====================
-            print("[INFO] 正在等待并查找 Just Reset 按钮...")
-            
-            # 采用带显式等待的高鲁棒性 XPath，确保弹窗渲染完成后能正确抓取
-            just_reset_selector = 'xpath://button[contains(., "Just Reset")]'
-            
-            try:
-                # 显式等待按钮出现并可见
-                sb.wait_for_element(just_reset_selector, timeout=10)
-                found_element = sb.find_element(just_reset_selector)
-                
-                if found_element:
-                    # 打印获取到的真实元素的 outerHTML，用来核对是不是你要的 Just Reset 按钮
-                    outer_html = sb.driver.execute_script("return arguments[0].outerHTML;", found_element)
-                    print("=" * 60)
-                    print("[DEBUG] 成功捕获到 Just Reset 按钮的真实 HTML 内容如下：")
-                    print(outer_html)
-                    print("=" * 60)
-
-                    print("[INFO] 正在点击 Just Reset 按钮...")
-                    sb.click(just_reset_selector)
-                else:
-                    raise Exception("未找到元素对象")
-            except Exception as e:
-                print(f"[ERROR] 没能找到 Just Reset 按钮，异常原因: {e}")
-                raise Exception("未找到 Just Reset 按钮元素")
+            # ==================== 查找并点击 Just Reset 按钮 ====================
+            click_just_reset_button(sb, timeout=15)
 
             time.sleep(3)
 
