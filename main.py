@@ -63,10 +63,11 @@ def accept_cookies_if_present(sb):
     """检测并点击 Cookie 询问框的 Accept All 按钮"""
     try:
         print("[INFO] 检查是否存在 Cookie 询问框...")
-        cookie_btn = sb.find_element('button.cky-btn.cky-btn-accept', timeout=3)
+        # 对应源码中的 Accept All 按钮
+        cookie_btn = sb.find_element('button.cky-btn-accept', timeout=3)
         if cookie_btn:
             print("[INFO] 发现 Cookie 询问框，正在点击 'Accept All'...")
-            sb.click('button.cky-btn.cky-btn-accept')
+            sb.click('button.cky-btn-accept')
             time.sleep(1)
     except Exception:
         print("[INFO] 未检测到 Cookie 询问框或已自动关闭。")
@@ -89,15 +90,16 @@ def main():
             # 处理可能挡住视线的 Cookie 询问框
             accept_cookies_if_present(sb)
 
-            # 填写邮箱
-            print("[INFO] 正在输入邮箱和密码...")
+            # 填写邮箱 (对应源码中 id="login", name="Email")
+            print("[INFO] 正在输入邮箱...")
             sb.wait_for_element('input[name="Email"]', timeout=10)
             sb.type('input[name="Email"]', USER_EMAIL)
             time.sleep(1)
             
-            # 使用 XPath //*[@id="password"] 填写密码
-            sb.wait_for_element('xpath://*[@id="password"]', timeout=10)
-            sb.type('xpath://*[@id="password"]', FIXED_PASSWORD)
+            # 填写密码 (对应源码中 id="password", name="Password")
+            print("[INFO] 正在输入密码...")
+            sb.wait_for_element('input[name="Password"]', timeout=15)
+            sb.type('input[name="Password"]', FIXED_PASSWORD)
             time.sleep(1)
             
             # 处理登录页面的 CF 验证
