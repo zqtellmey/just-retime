@@ -16,6 +16,14 @@ USER_EMAIL = os.getenv("USER_EMAIL", "")
 FIXED_PASSWORD = os.getenv("FIXED_PASSWORD", "")
 # ======================================================================
 
+# ==================== 坐标手动校准区 ====================
+# 如果红点没对准 checkbox，请微调这两个数值：
+# OFFSET_X: 正数往右，负数往左
+# OFFSET_Y: 正数往下，负数往上
+OFFSET_X = -50  
+OFFSET_Y = 100  
+# ======================================================
+
 def send_telegram_message(message, image_path=None):
     """发送消息和可选的截图到 Telegram"""
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
@@ -45,14 +53,13 @@ def draw_red_dot_on_screenshot(image_path, x, y, radius=15):
         draw = ImageDraw.Draw(img)
         draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill="red", outline="white", width=4)
         img.save(image_path)
-        print(f"[DEBUG] 成功在校准坐标 ({x}, {y}) 处绘制红点。")
+        print(f"[DEBUG] 已在校准坐标 ({x}, {y}) 处绘制红点。")
     except Exception as e:
         print(f"[WARN] 绘制红点失败: {e}")
 
 def handle_cloudflare_turnstile(sb, step_name=""):
     """
-    带坐标校准的过 CF 人机验证逻辑
-    针对弹窗环境，自动对 iframe 坐标进行向下偏移校准，精确点击复选框
+    带手动坐标偏移校准的 CF 验证逻辑
     """
     prefix = f"({step_name}) " if step_name else ""
     screenshot_path = "step_screenshot.png"
@@ -64,44 +71,38 @@ def handle_cloudflare_turnstile(sb, step_name=""):
             print(f"[INFO] {prefix}未检测到 Turnstile 拦截或已自动通过。")
             return True
         
-        print(f"[INFO] {prefix}发现 Turnstile 拦截，准备进行精准坐标校准点击...")
+        print(f"[INFO] {prefix}发现 Turnstile 拦截，准备应用手动偏移坐标进行点击...")
 
-        # 🎯 核心校准逻辑：获取 Turnstile 容器坐标，并根据弹窗布局进行像素偏移修正
-        target_x, target_y = None, None
+        # 🎯 核心校准逻辑：获取 iframe 中心，并加上手动偏移量
         try:
             box_coords = sb.driver.execute_script("""
                 const el = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
                 if (el) {
                     const rect = el.getBoundingClientRect();
                     return {
-                        left: rect.left,
-                        top: rect.top,
-                        width: rect.width,
-                        height: rect.height
+                        x: Math.round(rect.left + rect.width / 2),
+                        y: Math.round(rect.top + rect.height / 2)
                     };
                 }
                 return null;
             """)
+            
             if box_coords:
-                # 依据页面布局：iframe 中心偏上，我们需要将点击点往下、往左微调到复选框位置
-                # 根据截图 3.jpg 比例：复选框在 iframe 内部靠左侧中间
-                target_x = int(box_coords['left'] + box_coords['width'] * 0.25) # 往左偏一点到复选框
-                target_y = int(box_coords['top'] + box_coords['height'] * 0.5)  # 垂直居中
+                final_x = box_coords['x'] + OFFSET_X
+                final_y = box_coords['y'] + OFFSET_Y
                 
-                print(f"[INFO] 计算出校准后的精准点击坐标: ({target_x}, {target_y})")
+                # 截取画面并打上红点发送
+                sb.save_screenshot(screenshot_path)
+                draw_red_dot_on_screenshot(screenshot_path, final_x, final_y)
+                send_telegram_message(f"🎯 <b>[坐标校准]</b> {step_name} 偏移量({OFFSET_X}, {OFFSET_Y})后的红点位置", screenshot_path)
+
+                print(f"[INFO] 执行精准校准点击: ({final_x}, {final_y})")
+                sb.uc_gui_click_x_y(final_x, final_y)
+            else:
+                print(f"[WARN] 未能捕获到 iframe 基础坐标，降级使用默认点击...")
+                sb.uc_gui_click_captcha()
         except Exception as coord_err:
-            print(f"[DEBUG] 坐标计算失败: {coord_err}")
-
-        # 如果成功计算出校准坐标，直接使用 SeleniumBase 的底层 GUI 绝对坐标点击
-        if target_x and target_y:
-            sb.save_screenshot(screenshot_path)
-            draw_red_dot_on_screenshot(screenshot_path, target_x, target_y)
-            send_telegram_message(f"🎯 <b>[校准红点]</b> {step_name} 修正后的复选框点击位置", screenshot_path)
-
-            # 使用 SeleniumBase 的底层 GUI 点击指定绝对坐标
-            sb.uc_gui_click_x_y(target_x, target_y)
-        else:
-            # 降级使用默认点击
+            print(f"[DEBUG] 坐标校准计算失败: {coord_err}")
             sb.uc_gui_click_captcha()
 
         time.sleep(3)
@@ -113,7 +114,7 @@ def handle_cloudflare_turnstile(sb, step_name=""):
             return True
 
         # 2. 备用降级：精准切入 iframe 内部点击
-        print(f"[INFO] {prefix}物理点击未生效，尝试切入 iframe 内部 DOM 点击...")
+        print(f"[INFO] {prefix}物理 GUI 点击未触发 Token，尝试切入 iframe 内部 DOM 点击...")
         iframes = sb.find_elements('iframe[src*="challenges.cloudflare.com"]')
         for idx, frame in enumerate(iframes):
             try:
