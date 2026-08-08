@@ -1,8 +1,8 @@
 name: Run Auto Script
 
 on:
-  schedule:
-    - cron: '0 0 * * *' # 可根据需要自行调整定时规则（例如每天执行一次）
+ # schedule:
+ #   - cron: '0 0 * * *' # 可根据需要自行调整定时规则（例如每天执行一次）
   workflow_dispatch:     # 支持在 GitHub 仓库 Actions 页面手动触发
 
 jobs:
